@@ -53,6 +53,37 @@ inputs.yaml                  # 上游输入配置（预留）
 outputs.yaml                 # 下游 agent 接口：定义如何定位已验证任务
 ```
 
+## 自适应调参机制
+
+AI agent（Claude Code）可以根据各语言的 SWE 数据产出效率，自动调整管线参数。
+
+### 工作原理
+
+1. **参数配置**：`inputs.yaml` 定义每种语言的 `timeout`、`cc_timeout`、`n_concurrent` 三个可调参数及运行状态
+2. **定期监控**：AI agent 每 30 分钟检查各语言的成功率（从 `verifiable_tasks.txt` 和 batch state 统计）
+3. **按需调参**：成功率偏低时增加超时，成功率高时提升并发，PR 池不足时自动补充
+4. **安全约束**：每次仅调整 1 个参数，间隔 ≥ 60 分钟，参数有上下界限制
+
+### 可调参数
+
+| 参数 | 范围 | 步长 | 作用 |
+|------|------|------|------|
+| `timeout` | 2400-5400s | 400 | swegen create 单 case 超时 |
+| `cc_timeout` | 1800-4200s | 300 | Claude Code session 超时 |
+| `n_concurrent` | 4-32 | 4 | 并发数 |
+
+### 使用方式
+
+```bash
+# 各语言 create 脚本自动从 inputs.yaml 读取参数
+bash scripts/create_py.sh
+
+# 或批量启动
+bash scripts/create_all_bg.sh
+```
+
+调参决策记录在 `logs/adaptive_decisions.jsonl`。详见 `docs/superpowers/specs/2026-04-22-adaptive-tuning-design.md`。
+
 ## License
 
 Apache-2.0
