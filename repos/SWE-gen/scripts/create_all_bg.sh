@@ -10,7 +10,7 @@ load_runtime_env
 
 mkdir -p logs/swegen-create
 
-echo "Starting create scripts..."
+echo "Starting create scripts (params from inputs.yaml)..."
 
 start_one() {
     local lang="$1"
