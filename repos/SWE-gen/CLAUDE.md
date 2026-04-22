@@ -125,3 +125,36 @@ outputs/              # Merged verified tasks (populated by extract_verified_tas
 - Install: `pip install -e .`
 - Run tests: `pytest tests/`
 - CLI entry point: `swegen` (defined in pyproject.toml)
+
+## Adaptive Parameter Tuning
+
+### Overview
+
+You (the AI agent) monitor and tune the SWE-gen pipeline. Configuration and status live in `inputs.yaml`.
+
+### Monitoring Cycle (every 30 minutes)
+
+1. **Collect status**: Count verified tasks from `artifacts/swe_tasks/{lang}-cc/verifiable_tasks.txt`. Count failures from batch state in `artifacts/swe_tasks/{lang}-cc/.swegen-create-batch/`. Update `inputs.yaml` `status` fields.
+2. **Decide tuning**: If `success_rate < 0.15` for 2 consecutive cycles, increase `timeout` (+400) or `cc_timeout` (+300). If `success_rate > 0.4` and `n_concurrent < 24`, increase `n_concurrent` (+4). If `success_rate >= 0.25`, do nothing.
+3. **Check PR pool**: If `pr_pool_remaining < 100`, run `python tools/collect_prs_wo_image.py --languages {lang} --repo_num 100 --max_prs_per_repo 50 --output_dir ./artifacts/collected_prs`, then deduplicate against processed PRs and update the input-ids-file.
+
+### Constraints
+
+- Adjust at most 1 parameter per language per cycle
+- Wait ≥ 2 cycles (60 min) between adjustments for the same language
+- Parameter bounds: timeout [2400, 5400], cc_timeout [1800, 4200], n_concurrent [4, 32]
+- Do NOT restart running create scripts unless `zero_success_streak >= 3`
+- Log every decision to `logs/adaptive_decisions.jsonl`
+
+### Reading params from inputs.yaml
+
+```bash
+eval $(python scripts/read_params.py --lang py --inputs-yaml inputs.yaml)
+echo $TIMEOUT $CC_TIMEOUT $N_CONCURRENT
+```
+
+### Decision log format
+
+```json
+{"timestamp": "2026-04-22T14:30:00Z", "lang": "rust", "action": "adjust_param", "param": "timeout", "old": 3600, "new": 4000, "reason": "success_rate 0.08 for 2 consecutive cycles"}
+```
