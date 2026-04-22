@@ -17,7 +17,7 @@
 ```yaml
 global:
   monitor_interval_min: 30
-  pr_pool_min_threshold: 20
+  pr_pool_min_threshold: 100
   collect_pr_defaults:
     repo_num: 100
     max_prs_per_repo: 50
@@ -129,7 +129,7 @@ languages:
 
 ## collect PR 补充逻辑
 
-当某语言 `pr_pool_remaining < 20` 时：
+当某语言 `pr_pool_remaining < 100` 时：
 
 ```bash
 python tools/collect_prs_wo_image.py \
