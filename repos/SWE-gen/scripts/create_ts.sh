@@ -17,7 +17,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 mkdir -p logs/swegen-create
-N_CONCURRENT="${N_CONCURRENT:-16}"
+# Read params from inputs.yaml (adaptive tuning)
+eval $(python "${PROJECT_ROOT}/scripts/read_params.py" --lang ts --inputs-yaml "${PROJECT_ROOT}/inputs.yaml")
+echo "TIMEOUT=${TIMEOUT} CC_TIMEOUT=${CC_TIMEOUT} N_CONCURRENT=${N_CONCURRENT}"
 
 # TypeScript repos frequently need build + transpile steps, so keep higher budgets.
 # After Feb->March merge, the output's own verifiable_tasks.txt is the single source
@@ -28,8 +30,8 @@ swegen create \
   --n-concurrent "${N_CONCURRENT}" \
   --output "${PROJECT_ROOT}/artifacts/swe_tasks/ts-cc" \
   --state-dir .swegen-ts \
-  --timeout 3600 \
-  --cc-timeout 3000 \
+  --timeout "${TIMEOUT}" \
+  --cc-timeout "${CC_TIMEOUT}" \
   --no-require-issue \
   --min-source-files 2 \
   --max-source-files 10 \

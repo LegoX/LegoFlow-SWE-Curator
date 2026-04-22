@@ -16,8 +16,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 mkdir -p logs/swegen-create
-N_CONCURRENT="${N_CONCURRENT:-16}"
-echo N_CONCURRENT=${N_CONCURRENT}
+# Read params from inputs.yaml (adaptive tuning)
+eval $(python "${PROJECT_ROOT}/scripts/read_params.py" --lang c --inputs-yaml "${PROJECT_ROOT}/inputs.yaml")
+echo "TIMEOUT=${TIMEOUT} CC_TIMEOUT=${CC_TIMEOUT} N_CONCURRENT=${N_CONCURRENT}"
 
 swegen create \
   --input-ids-file "${PROJECT_ROOT}/artifacts/collected_prs/c_pr_ids.txt" \
@@ -25,8 +26,8 @@ swegen create \
   --n-concurrent "${N_CONCURRENT}" \
   --output "${PROJECT_ROOT}/artifacts/swe_tasks/c-cc" \
   --state-dir .swegen-c \
-  --timeout 3200 \
-  --cc-timeout 2400 \
+  --timeout "${TIMEOUT}" \
+  --cc-timeout "${CC_TIMEOUT}" \
   --no-require-issue \
   --min-source-files 2 \
   --max-source-files 10 \

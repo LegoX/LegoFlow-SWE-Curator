@@ -17,8 +17,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 mkdir -p logs/swegen-create
-N_CONCURRENT="${N_CONCURRENT:-16}"
-echo N_CONCURRENT=${N_CONCURRENT}
+# Read params from inputs.yaml (adaptive tuning)
+eval $(python "${PROJECT_ROOT}/scripts/read_params.py" --lang py --inputs-yaml "${PROJECT_ROOT}/inputs.yaml")
+echo "TIMEOUT=${TIMEOUT} CC_TIMEOUT=${CC_TIMEOUT} N_CONCURRENT=${N_CONCURRENT}"
 
 # Align Python with Go/JS thresholds/timeouts to avoid over-filtering and premature CC timeout.
 # After Feb->March merge, the output's own verifiable_tasks.txt is the single source
@@ -29,8 +30,8 @@ swegen create \
   --n-concurrent "${N_CONCURRENT}" \
   --output "${PROJECT_ROOT}/artifacts/swe_tasks/py-cc" \
   --state-dir .swegen-py \
-  --timeout 3200 \
-  --cc-timeout 2400 \
+  --timeout "${TIMEOUT}" \
+  --cc-timeout "${CC_TIMEOUT}" \
   --no-require-issue \
   --min-source-files 3 \
   --max-source-files 10 \

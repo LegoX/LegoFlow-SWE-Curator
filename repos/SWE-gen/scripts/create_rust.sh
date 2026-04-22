@@ -16,9 +16,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 mkdir -p logs/swegen-create
-# Rust: higher concurrency, sorted by quality
-N_CONCURRENT="${N_CONCURRENT:-16}"
-echo N_CONCURRENT=${N_CONCURRENT}
+# Read params from inputs.yaml (adaptive tuning)
+eval $(python "${PROJECT_ROOT}/scripts/read_params.py" --lang rust --inputs-yaml "${PROJECT_ROOT}/inputs.yaml")
+echo "TIMEOUT=${TIMEOUT} CC_TIMEOUT=${CC_TIMEOUT} N_CONCURRENT=${N_CONCURRENT}"
 
 # Rust projects need longer build times; use higher cc-timeout
 swegen create \
@@ -27,8 +27,8 @@ swegen create \
   --n-concurrent "${N_CONCURRENT}" \
   --output "${PROJECT_ROOT}/artifacts/swe_tasks/rust-cc" \
   --state-dir .swegen-rust \
-  --timeout 3600 \
-  --cc-timeout 3000 \
+  --timeout "${TIMEOUT}" \
+  --cc-timeout "${CC_TIMEOUT}" \
   --no-require-issue \
   --min-source-files 2 \
   --max-source-files 10 \
