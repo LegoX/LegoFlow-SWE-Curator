@@ -43,11 +43,11 @@ PS：
 
 Usage:
 
-    export GITHUB_TOKENS="token1,token2,token3"
+    # Put GitHub tokens in /home/ywxzml3j/ywxzml3juser23/SWE-gen/gh_token.txt
 
     # 运行收集 (worker数量自动根据有效token数量确定)
 
-    python tools/collect_prs_wo_image.py \
+    GITHUB_REQUIRE_PROXY_ISOLATION=0 python tools/collect_prs_wo_image.py \
         --repo_num 2000 \
         --max_prs_per_repo 50 \
         --output_dir ./collected_prs 
@@ -75,9 +75,18 @@ Usage:
 wait
 
 Environment:
-    GITHUB_TOKENS: Comma-separated list of GitHub tokens (e.g., "token1,token2,token3")
+    GitHub tokens are loaded only from /home/ywxzml3j/ywxzml3juser23/SWE-gen/gh_token.txt.
+                   GITHUB_TOKEN/GITHUB_TOKENS are intentionally ignored by this collector.
                    Tokens are validated at startup; invalid tokens are filtered out.
                    Number of parallel workers = number of valid tokens.
+    GITHUB_TOKEN_PROXIES: Optional comma-separated token/proxy mappings:
+                   "token1=http://user:pass@ip1:port,token2=socks5://user:pass@ip2:port"
+    GITHUB_REQUIRE_PROXY_ISOLATION: Defaults to 1. When multiple tokens are used,
+                   every token must have a fixed proxy mapping to avoid sharing one IP.
+
+Proxy config files:
+    gh_token.txt may contain either one token per line or "token proxy_url" per line.
+    github_token_proxies.txt / gh_token_proxies.txt may contain "token proxy_url" mappings.
 
 Output:
     - repos.jsonl: All qualifying repos (one per line)
@@ -98,7 +107,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, RLock
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Set, Tuple
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 import hashlib
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+COLLECT_GITHUB_TOKEN_FILE = os.environ.get(
+    "COLLECT_GITHUB_TOKEN_FILE",
+    str(PROJECT_ROOT / "gh_token.txt"),
+)
 
 try:
     from tqdm import tqdm
@@ -205,6 +222,184 @@ def format_recovery_time(seconds: float) -> str:
         else:
             return f"{hours} 小时"
 
+
+def mask_token(token: str) -> str:
+    """Return a non-secret token preview for logs."""
+    if len(token) <= 12:
+        return token[:4] + "..."
+    return f"{token[:8]}...{token[-4:]}"
+
+
+def normalize_proxy_url(proxy_url: str) -> Optional[str]:
+    """Normalize a proxy URL from config; return None for explicit direct mode."""
+    proxy_url = proxy_url.strip()
+    if not proxy_url or proxy_url.lower() in {"none", "direct", "-"}:
+        return None
+    if "://" not in proxy_url:
+        proxy_url = f"http://{proxy_url}"
+    return proxy_url
+
+
+def build_proxy_dict(proxy_url: Optional[str]) -> Optional[Dict[str, str]]:
+    """Build a requests-compatible proxy dict for both http and https."""
+    proxy_url = normalize_proxy_url(proxy_url or "")
+    if not proxy_url:
+        return None
+    return {"http": proxy_url, "https": proxy_url}
+
+
+def mask_proxy_url(proxy_url: str) -> str:
+    """Mask proxy credentials before printing."""
+    try:
+        parts = urlsplit(proxy_url)
+        if parts.username or parts.password:
+            host = parts.hostname or ""
+            if parts.port:
+                host = f"{host}:{parts.port}"
+            netloc = f"***@{host}"
+            return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        pass
+    return proxy_url
+
+
+def make_requests_session(proxy_dict: Optional[Dict[str, str]] = None) -> requests.Session:
+    """Create a session isolated from ambient proxy environment variables."""
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({"Connection": "close"})
+    if proxy_dict:
+        session.proxies.update(proxy_dict)
+    return session
+
+
+def parse_token_proxy_line(line: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse token lines that may optionally include a fixed proxy URL."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None, None
+
+    if "=" in line and not line.startswith(("http://", "https://", "socks4://", "socks5://")):
+        token, proxy_url = line.split("=", 1)
+        return token.strip(), proxy_url.strip()
+
+    parts = line.split(None, 1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+
+    return line, None
+
+
+def load_collection_tokens_from_file(
+    token_file: str = COLLECT_GITHUB_TOKEN_FILE,
+) -> Tuple[List[str], Dict[str, Dict[str, str]]]:
+    """Load collector tokens from gh_token.txt."""
+    tokens: List[str] = []
+    token_proxy_map: Dict[str, Dict[str, str]] = {}
+
+    if not os.path.exists(token_file):
+        return tokens, token_proxy_map
+
+    with open(token_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            token, proxy_url = parse_token_proxy_line(line)
+            if not token:
+                continue
+            tokens.append(token)
+            proxy_dict = build_proxy_dict(proxy_url)
+            if proxy_dict:
+                token_proxy_map[token] = proxy_dict
+
+    return list(dict.fromkeys(tokens)), token_proxy_map
+
+
+def load_collection_tokens_from_env() -> List[str]:
+    """Load collector tokens from GITHUB_TOKENS or GITHUB_TOKEN."""
+    env_tokens: List[str] = []
+    tokens_str = os.environ.get("GITHUB_TOKENS", "")
+    if tokens_str:
+        env_tokens.extend(t.strip() for t in tokens_str.split(",") if t.strip())
+    single_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if single_token:
+        env_tokens.append(single_token)
+    return list(dict.fromkeys(env_tokens))
+
+
+def select_collection_tokens(
+    tokens: List[str],
+    token_proxy_map: Dict[str, Dict[str, str]],
+    limit: int,
+) -> Tuple[List[str], Dict[str, Dict[str, str]]]:
+    """Limit startup token validation while keeping proxy mappings in sync."""
+    if limit <= 0 or len(tokens) <= limit:
+        selected = list(tokens)
+    else:
+        selected = list(tokens[:limit])
+
+    selected_set = set(selected)
+    return selected, {
+        token: proxy_dict
+        for token, proxy_dict in token_proxy_map.items()
+        if token in selected_set
+    }
+
+
+def load_token_proxy_mapping_from_env() -> Dict[str, Dict[str, str]]:
+    """Load fixed token->proxy mappings from GITHUB_TOKEN_PROXIES."""
+    raw_mappings = os.environ.get("GITHUB_TOKEN_PROXIES", "")
+    token_proxy_map: Dict[str, Dict[str, str]] = {}
+    if not raw_mappings:
+        return token_proxy_map
+
+    entries = []
+    for chunk in raw_mappings.replace("\n", ",").split(","):
+        chunk = chunk.strip()
+        if chunk:
+            entries.append(chunk)
+
+    for entry in entries:
+        token, proxy_url = parse_token_proxy_line(entry)
+        proxy_dict = build_proxy_dict(proxy_url)
+        if token and proxy_dict:
+            token_proxy_map[token] = proxy_dict
+
+    return token_proxy_map
+
+
+def load_token_proxy_mapping_from_files(proxy_files: List[str]) -> Dict[str, Dict[str, str]]:
+    """Load fixed token->proxy mappings from mapping files."""
+    token_proxy_map: Dict[str, Dict[str, str]] = {}
+
+    for proxy_file in proxy_files:
+        if not os.path.exists(proxy_file):
+            continue
+
+        loaded = 0
+        with open(proxy_file, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                token, proxy_url = parse_token_proxy_line(raw_line)
+                proxy_dict = build_proxy_dict(proxy_url)
+                if token and proxy_dict:
+                    token_proxy_map[token] = proxy_dict
+                    loaded += 1
+
+        print(f"Loaded {loaded} token proxy mapping(s) from {proxy_file}")
+
+    return token_proxy_map
+
+
+def log_proxy_isolation_summary(tokens: List[str], token_proxy_map: Dict[str, Dict[str, str]]) -> None:
+    """Print a short non-secret summary of token/proxy binding."""
+    mapped = sum(1 for token in tokens if token in token_proxy_map)
+    log(f"Proxy isolation: {mapped}/{len(tokens)} token(s) have fixed proxy mappings")
+    for token in tokens:
+        proxy_dict = token_proxy_map.get(token)
+        if not proxy_dict:
+            log(f"  - {mask_token(token)} -> DIRECT")
+            continue
+        proxy_url = proxy_dict.get("https") or proxy_dict.get("http") or ""
+        log(f"  - {mask_token(token)} -> {mask_proxy_url(proxy_url)}")
+
 LANGUAGES = ['c', 'cpp', 'go', 'java', 'javascript', 'typescript', 'python', 'rust']
 # LANGUAGES = ['go', 'javascript', 'typescript', 'python']
 GITHUB_API_URL = "https://api.github.com"
@@ -217,6 +412,8 @@ GITHUB_API_URL = "https://api.github.com"
 
 # Base delay between API requests (in seconds)
 API_REQUEST_DELAY = 0.3  # Reduced from 0.8 (99 tokens provide ample quota)
+GITHUB_API_TIMEOUT = float(os.environ.get("GITHUB_API_TIMEOUT", "30"))
+GITHUB_DIFF_TIMEOUT = float(os.environ.get("GITHUB_DIFF_TIMEOUT", "60"))
 
 # Delays for specific operations (in seconds)
 PR_LIST_DELAY = 0.2      # Reduced from 0.5
@@ -242,56 +439,84 @@ DIFF_RATE_LIMIT_DELAY = 15.0   # Delay for diff requests when rate limited
 TASK_CANCELLATION_DELAY = 0.5  # Delay for cancelled tasks to finish
 
 # ============================================================================
-# FILTERING CONFIGURATION (v2.3 - Fixed progress tracking for criteria changes)
+# FILTERING CONFIGURATION (v2.5 - Relaxed thresholds for more qualifying PRs)
 # ============================================================================
 
 # Filtering criteria version - increment this when changing filtering criteria
 # This ensures that PRs are re-checked when criteria change
-FILTERING_CRITERIA_VERSION = "v2.4"
+FILTERING_CRITERIA_VERSION = "v2.7"
 
 # Repository filtering thresholds (defaults)
-MIN_STARS = 200                    # Minimum stars (relaxed from 500)
-MIN_MERGED_PRS = 20                # Minimum merged PRs (relaxed from 50)
-MIN_LANGUAGE_PERCENTAGE = 0.6     # Target language must be >60% of codebase (relaxed from 70%)
-MAX_DAYS_SINCE_PUSH = 1095         # 3 years
+MIN_STARS = 30                     # Minimum stars (relaxed from 50)
+MIN_MERGED_PRS = 5                 # Minimum merged PRs
+MIN_LANGUAGE_PERCENTAGE = 0.4      # Target language must be >40% of codebase
+MAX_DAYS_SINCE_PUSH = 1095         # 3 years (per-language overrides below)
 
 # PR filtering thresholds (defaults)
-MIN_ISSUE_BODY_LENGTH = 10         # Minimum issue description length (relaxed from 50)
-MIN_PR_BODY_LENGTH = -1             # No minimum PR body length (relaxed from 5)
-MAX_FILES_CHANGED = 20             # Maximum files changed (relaxed from 15)
+MIN_ISSUE_BODY_LENGTH = 10         # Minimum issue description length
+MIN_PR_BODY_LENGTH = -1            # No minimum PR body length
+MAX_FILES_CHANGED = 25             # Maximum files changed (relaxed from 20)
 MIN_FILES_CHANGED = 1              # Minimum files changed
-MAX_LINES_CHANGED = 1000           # Maximum lines added + deleted (relaxed from 800)
+MAX_LINES_CHANGED = 1500           # Maximum lines added + deleted (relaxed from 1000)
 
-# Per-language overrides for niche languages that need more PRs.
-# Each language can have its own filtering thresholds.
+# Per-language overrides for languages that need tuned thresholds.
 LANGUAGE_OVERRIDES = {
     'c': {
-        'MIN_STARS': 50,              # Very low — many quality C projects are niche
-        'MIN_MERGED_PRS': 5,          # Small but active projects
-        'MIN_LANGUAGE_PERCENTAGE': 0.4, # C often mixed with asm/python/shell
-        'MAX_FILES_CHANGED': 30,
-        'MAX_LINES_CHANGED': 1500,
+        'MIN_STARS': 10,
+        'MIN_MERGED_PRS': 3,
+        'MIN_LANGUAGE_PERCENTAGE': 0.25,
+        'MAX_FILES_CHANGED': 35,
+        'MAX_LINES_CHANGED': 2000,
+        'MAX_DAYS_SINCE_PUSH': 1825,  # 5 years — classic C projects update slowly
     },
     'cpp': {
-        'MIN_STARS': 50,
-        'MIN_MERGED_PRS': 5,
-        'MIN_LANGUAGE_PERCENTAGE': 0.4, # C++ often mixed with C/python
+        'MIN_STARS': 10,
+        'MIN_MERGED_PRS': 3,
+        'MIN_LANGUAGE_PERCENTAGE': 0.25,
+        'MAX_FILES_CHANGED': 35,
+        'MAX_LINES_CHANGED': 2000,
+        'MAX_DAYS_SINCE_PUSH': 1825,
+    },
+    'rust': {
+        'MIN_STARS': 10,
+        'MIN_MERGED_PRS': 3,
+        'MIN_LANGUAGE_PERCENTAGE': 0.35,
         'MAX_FILES_CHANGED': 30,
         'MAX_LINES_CHANGED': 1500,
     },
-    'rust': {
-        'MIN_STARS': 50,
-        'MIN_MERGED_PRS': 5,
-        'MIN_LANGUAGE_PERCENTAGE': 0.5,
-        'MAX_FILES_CHANGED': 25,
-        'MAX_LINES_CHANGED': 1200,
-    },
     'java': {
-        'MIN_STARS': 80,
-        'MIN_MERGED_PRS': 10,
-        'MIN_LANGUAGE_PERCENTAGE': 0.5,
+        'MIN_STARS': 20,
+        'MIN_MERGED_PRS': 3,
+        'MIN_LANGUAGE_PERCENTAGE': 0.35,
+        'MAX_FILES_CHANGED': 35,
+        'MAX_LINES_CHANGED': 1800,
+        'MAX_DAYS_SINCE_PUSH': 1460,  # 4 years — enterprise Java has long cycles
+    },
+    'go': {
+        'MIN_STARS': 30,
+        'MIN_MERGED_PRS': 5,
+        'MAX_FILES_CHANGED': 30,
+        'MAX_LINES_CHANGED': 1500,
+    },
+    'python': {
+        'MIN_STARS': 30,
+        'MIN_MERGED_PRS': 5,
         'MAX_FILES_CHANGED': 25,
-        'MAX_LINES_CHANGED': 1200,
+        'MAX_LINES_CHANGED': 1500,
+    },
+    'typescript': {
+        'MIN_STARS': 30,
+        'MIN_MERGED_PRS': 5,
+        'MIN_LANGUAGE_PERCENTAGE': 0.4,
+        'MAX_FILES_CHANGED': 30,
+        'MAX_LINES_CHANGED': 1500,
+    },
+    'javascript': {
+        'MIN_STARS': 30,
+        'MIN_MERGED_PRS': 5,
+        'MIN_LANGUAGE_PERCENTAGE': 0.4,
+        'MAX_FILES_CHANGED': 30,
+        'MAX_LINES_CHANGED': 1500,
     },
 }
 
@@ -305,14 +530,14 @@ def get_lang_config(language: str, key: str):
 
 # Dependency management files by language (expanded for better coverage)
 DEPENDENCY_FILES = {
-    'python': ['requirements.txt', 'pyproject.toml', 'setup.py', 'setup.cfg', 'Pipfile', 'poetry.lock', 'tox.ini', 'environment.yml'],
-    'javascript': ['package.json', 'yarn.lock', 'package-lock.json'],
-    'typescript': ['package.json', 'tsconfig.json', 'yarn.lock', 'package-lock.json'],
-    'java': ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'gradlew'],
-    'go': ['go.mod', 'go.sum'],
+    'python': ['requirements.txt', 'pyproject.toml', 'setup.py', 'setup.cfg', 'Pipfile', 'poetry.lock', 'tox.ini', 'environment.yml', 'conda.yaml', 'pdm.lock'],
+    'javascript': ['package.json', 'yarn.lock', 'package-lock.json', 'pnpm-lock.yaml', 'bun.lockb'],
+    'typescript': ['package.json', 'tsconfig.json', 'yarn.lock', 'package-lock.json', 'pnpm-lock.yaml', 'bun.lockb'],
+    'java': ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'gradlew', 'mvnw'],
+    'go': ['go.mod', 'go.sum', 'vendor', 'Gopkg.toml', 'Gopkg.lock'],
     'rust': ['Cargo.toml', 'Cargo.lock'],
-    'c': ['CMakeLists.txt', 'Makefile', 'configure', 'configure.ac', 'meson.build', 'conanfile.txt', 'conanfile.py', 'autogen.sh', 'GNUmakefile', 'makefile'],
-    'cpp': ['CMakeLists.txt', 'Makefile', 'configure', 'configure.ac', 'meson.build', 'conanfile.txt', 'conanfile.py', 'vcpkg.json', 'autogen.sh', 'GNUmakefile', 'makefile'],
+    'c': ['CMakeLists.txt', 'Makefile', 'configure', 'configure.ac', 'meson.build', 'conanfile.txt', 'conanfile.py', 'autogen.sh', 'GNUmakefile', 'makefile', 'SConstruct', 'wscript'],
+    'cpp': ['CMakeLists.txt', 'Makefile', 'configure', 'configure.ac', 'meson.build', 'conanfile.txt', 'conanfile.py', 'vcpkg.json', 'autogen.sh', 'GNUmakefile', 'makefile', 'SConstruct', 'wscript', 'BUILD.bazel', 'WORKSPACE'],
 }
 
 # CI/CD configuration files (expanded)
@@ -383,34 +608,52 @@ TEST_FILE_PATTERNS = {
     'python': [
         r'test_.*\.py$', r'.*_test\.py$', r'tests?/.*\.py$', r'.*tests?\.py$',
         r'conftest\.py$', r'pytest.*\.py$', r'.*_tests\.py$',
+        r'testing/.*\.py$',
     ],
     'javascript': [
         r'.*\.test\.js$', r'.*\.spec\.js$', r'__tests__/.*\.js$', r'test/.*\.js$', r'tests?/.*\.js$',
         r'.*\.test\.jsx$', r'.*\.spec\.jsx$', r'.*\.test\.mjs$', r'.*\.spec\.mjs$',
+        r'.*\.e2e\.js$', r'.*\.e2e\.mjs$',
+        r'cypress/.*\.js$', r'e2e/.*\.js$',
     ],
     'typescript': [
         r'.*\.test\.ts$', r'.*\.spec\.ts$', r'__tests__/.*\.ts$', r'test/.*\.ts$', r'tests?/.*\.ts$',
         r'.*\.test\.tsx$', r'.*\.spec\.tsx$',
+        r'.*\.e2e\.ts$', r'.*\.e2e-spec\.ts$',
+        r'cypress/.*\.ts$', r'e2e/.*\.ts$',
     ],
     'java': [
         r'.*Test\.java$', r'.*Tests\.java$', r'.*TestCase\.java$', r'src/test/.*\.java$',
-        r'.*IT\.java$', r'.*ITCase\.java$',  # Integration tests
+        r'.*IT\.java$', r'.*ITCase\.java$',
+        r'.*Spec\.java$', r'.*TestSuite\.java$',
     ],
-    'go': [r'.*_test\.go$'],
-    'rust': [r'tests?/.*\.rs$', r'.*_test\.rs$', r'.*_tests\.rs$'],
+    'go': [
+        r'.*_test\.go$',
+        r'testdata/.*',
+    ],
+    'rust': [
+        r'tests?/.*\.rs$', r'.*_test\.rs$', r'.*_tests\.rs$',
+        r'benches/.*\.rs$',
+    ],
     'c': [
         r'test.*\.c$', r'.*_test\.c$', r'tests?/.*\.c$',
-        r't/.*\.c$', r'check.*\.c$', r'.*_check\.c$',  # Common C test patterns
+        r't/.*\.c$', r'check.*\.c$', r'.*_check\.c$',
+        r'.*_unittest\.c$', r'unit_test.*\.c$',
     ],
     'cpp': [
         r'test.*\.cpp$', r'.*_test\.cpp$', r'tests?/.*\.cpp$', r'test.*\.cc$', r'.*_test\.cc$',
         r'.*_tests\.cpp$', r'.*_tests\.cc$', r'.*Test\.cpp$', r'.*Test\.cc$',
-        r'gtest.*\.cpp$', r'.*_gtest\.cpp$',  # Google Test patterns
+        r'gtest.*\.cpp$', r'.*_gtest\.cpp$',
+        r'.*_unittest\.cpp$', r'.*_unittest\.cc$',
+        r'test.*\.cxx$', r'.*_test\.cxx$',
     ],
 }
 
 
-def validate_github_tokens(tokens: List[str]) -> Tuple[List[str], Dict[str, dict]]:
+def validate_github_tokens(
+    tokens: List[str],
+    token_proxy_map: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Tuple[List[str], Dict[str, dict]]:
     """
     Validate GitHub tokens by making a test API call.
     Returns tuple of (valid_tokens, token_rate_limits).
@@ -426,59 +669,72 @@ def validate_github_tokens(tokens: List[str]) -> Tuple[List[str], Dict[str, dict
     token_rate_limits = {}
     current_time = time.time()
     
+    token_proxy_map = token_proxy_map or {}
+
     for token in tokens:
         try:
             headers = {
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github.v3+json"
             }
-            response = requests.get(
-                f"{GITHUB_API_URL}/user",
-                headers=headers,
-                timeout=10
-            )
-            
-            # Extract rate limit info from headers (available in all responses)
-            remaining_str = response.headers.get('X-RateLimit-Remaining', '0')
-            reset_time_str = response.headers.get('X-RateLimit-Reset', '0')
-            
+            session = make_requests_session(token_proxy_map.get(token))
+            response = None
             try:
-                remaining = int(remaining_str) if remaining_str != '?' else 0
-                reset_time = int(reset_time_str) if reset_time_str != '0' else 0
-            except (ValueError, TypeError):
-                remaining = 0
-                reset_time = 0
+                response = session.get(f"{GITHUB_API_URL}/user", headers=headers, timeout=10)
             
-            # Store rate limit info
-            token_rate_limits[token] = {
-                'remaining': remaining,
-                'reset_time': reset_time
-            }
-            
-            if response.status_code == 200:
-                user_info = response.json()
-                username = user_info.get('login', 'unknown')
-                print(f"  ✓ Token valid: {token[:8]}...{token[-4:]} (user: {username}, remaining: {remaining})")
-                valid_tokens.append(token)
-            elif response.status_code == 401:
-                print(f"  ✗ Token invalid (401 Unauthorized): {token[:8]}...{token[-4:]}")
-            elif response.status_code == 403:
-                # Could be rate limited but still valid
-                if 'rate limit' in response.text.lower():
+                # Extract rate limit info from headers (available in all responses)
+                remaining_str = response.headers.get('X-RateLimit-Remaining', '0')
+                reset_time_str = response.headers.get('X-RateLimit-Reset', '0')
+
+                try:
+                    remaining = int(remaining_str) if remaining_str != '?' else 0
+                    reset_time = int(reset_time_str) if reset_time_str != '0' else 0
+                except (ValueError, TypeError):
+                    remaining = 0
+                    reset_time = 0
+
+                if response.status_code == 200:
+                    user_info = response.json()
+                    username = user_info.get('login', 'unknown')
+                    print(f"  ✓ Token valid: {mask_token(token)} (user: {username}, remaining: {remaining})")
                     valid_tokens.append(token)
-                    # Calculate and print recovery time
-                    if reset_time > 0:
-                        recovery_seconds = max(0, reset_time - current_time)
-                        recovery_str = format_recovery_time(recovery_seconds)
-                        print(f"  ⚠ Token rate limited but valid: {token[:8]}...{token[-4:]} (恢复时间: {recovery_str})")
+                    # Store rate limit info for valid tokens
+                    token_rate_limits[token] = {
+                        'remaining': remaining,
+                        'reset_time': reset_time
+                    }
+                elif response.status_code == 401:
+                    print(f"  ✗ Token invalid (401 Unauthorized): {mask_token(token)}")
+                elif response.status_code == 403:
+                    # Could be rate limited but still valid
+                    if 'rate limit' in response.text.lower():
+                        valid_tokens.append(token)
+                        # Store rate limit info for rate-limited tokens
+                        token_rate_limits[token] = {
+                            'remaining': remaining,
+                            'reset_time': reset_time
+                        }
+                        # Calculate and print recovery time
+                        if reset_time > 0:
+                            recovery_seconds = max(0, reset_time - current_time)
+                            recovery_str = format_recovery_time(recovery_seconds)
+                            print(f"  ⚠ Token rate limited but valid: {mask_token(token)} (恢复时间: {recovery_str})")
+                        else:
+                            print(f"  ⚠ Token rate limited but valid: {mask_token(token)}")
+                    elif 'suspended' in response.text.lower():
+                        print(f"  ✗ Token account suspended: {mask_token(token)}")
+                        # Don't add suspended tokens to rate_limits dict
+                        continue
                     else:
-                        print(f"  ⚠ Token rate limited but valid: {token[:8]}...{token[-4:]}")
+                        print(f"  ✗ Token forbidden (403): {mask_token(token)}")
                 else:
-                    print(f"  ✗ Token forbidden (403): {token[:8]}...{token[-4:]}")
-            else:
-                print(f"  ✗ Token check failed ({response.status_code}): {token[:8]}...{token[-4:]}")
+                    print(f"  ✗ Token check failed ({response.status_code}): {mask_token(token)}")
+            finally:
+                if response is not None:
+                    response.close()
+                session.close()
         except Exception as e:
-            print(f"  ✗ Token check error: {token[:8]}...{token[-4:]} - {e}")
+            print(f"  ✗ Token check error: {mask_token(token)} - {e}")
             # Set default rate limit info for failed tokens
             token_rate_limits[token] = {
                 'remaining': 0,
@@ -488,7 +744,10 @@ def validate_github_tokens(tokens: List[str]) -> Tuple[List[str], Dict[str, dict
     return valid_tokens, token_rate_limits
 
 
-def check_token_rate_limits(tokens: List[str]) -> Dict[str, dict]:
+def check_token_rate_limits(
+    tokens: List[str],
+    token_proxy_map: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Dict[str, dict]:
     """
     Check rate limit status for all tokens using the /rate_limit API endpoint.
     
@@ -505,44 +764,49 @@ def check_token_rate_limits(tokens: List[str]) -> Dict[str, dict]:
     rate_limit_info = {}
     current_time = time.time()
     
+    token_proxy_map = token_proxy_map or {}
+
     for token in tokens:
         try:
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json"
             }
-            response = requests.get(
-                f"{GITHUB_API_URL}/rate_limit",
-                headers=headers,
-                timeout=10
-            )
+            session = make_requests_session(token_proxy_map.get(token))
+            response = None
+            try:
+                response = session.get(f"{GITHUB_API_URL}/rate_limit", headers=headers, timeout=10)
             
-            if response.status_code == 200:
-                data = response.json()
-                core_info = data.get('resources', {}).get('core', {})
-                rate_limit_info[token] = {
-                    'remaining': core_info.get('remaining', 0),
-                    'limit': core_info.get('limit', 5000),
-                    'reset': core_info.get('reset', 0),
-                    'core': core_info
-                }
-            else:
-                # If rate_limit endpoint fails, try to get info from headers
-                remaining_str = response.headers.get('X-RateLimit-Remaining', '0')
-                reset_time_str = response.headers.get('X-RateLimit-Reset', '0')
-                try:
-                    remaining = int(remaining_str) if remaining_str != '?' else 0
-                    reset_time = int(reset_time_str) if reset_time_str != '0' else 0
-                except (ValueError, TypeError):
-                    remaining = 0
-                    reset_time = 0
-                
-                rate_limit_info[token] = {
-                    'remaining': remaining,
-                    'limit': 5000,
-                    'reset': reset_time,
-                    'core': {}
-                }
+                if response.status_code == 200:
+                    data = response.json()
+                    core_info = data.get('resources', {}).get('core', {})
+                    rate_limit_info[token] = {
+                        'remaining': core_info.get('remaining', 0),
+                        'limit': core_info.get('limit', 5000),
+                        'reset': core_info.get('reset', 0),
+                        'core': core_info
+                    }
+                else:
+                    # If rate_limit endpoint fails, try to get info from headers
+                    remaining_str = response.headers.get('X-RateLimit-Remaining', '0')
+                    reset_time_str = response.headers.get('X-RateLimit-Reset', '0')
+                    try:
+                        remaining = int(remaining_str) if remaining_str != '?' else 0
+                        reset_time = int(reset_time_str) if reset_time_str != '0' else 0
+                    except (ValueError, TypeError):
+                        remaining = 0
+                        reset_time = 0
+                    
+                    rate_limit_info[token] = {
+                        'remaining': remaining,
+                        'limit': 5000,
+                        'reset': reset_time,
+                        'core': {}
+                    }
+            finally:
+                if response is not None:
+                    response.close()
+                session.close()
         except Exception as e:
             # On error, set default values
             rate_limit_info[token] = {
@@ -590,6 +854,7 @@ class TokenManager:
     lock: RLock = field(default_factory=RLock)
     current_index: int = 0
     initial_rate_limits: Optional[Dict[str, dict]] = field(default=None)
+    max_concurrent_per_token: int = 1
     
     def __post_init__(self):
         for token in self.tokens:
@@ -599,13 +864,15 @@ class TokenManager:
                 self.token_status[token] = {
                     'remaining': rate_limit_info.get('remaining', 5000),
                     'reset_time': rate_limit_info.get('reset_time', 0),
-                    'is_valid': True
+                    'is_valid': True,
+                    'in_flight': 0
                 }
             else:
                 self.token_status[token] = {
                     'remaining': 5000,
                     'reset_time': 0,
-                    'is_valid': True
+                    'is_valid': True,
+                    'in_flight': 0
                 }
     
     def get_available_token(self) -> Optional[str]:
@@ -618,6 +885,7 @@ class TokenManager:
             
             # First pass: find token with remaining quota, prioritizing tokens with more quota
             available_tokens = []
+            has_token_with_quota = False
             
             for token in self.tokens:
                 status = self.token_status[token]
@@ -636,19 +904,28 @@ class TokenManager:
                 
                 # Only consider tokens with quota above threshold
                 if status['remaining'] >= MIN_QUOTA_THRESHOLD:
-                    available_tokens.append((token, status['remaining']))
+                    has_token_with_quota = True
+                    if status.get('in_flight', 0) < self.max_concurrent_per_token:
+                        available_tokens.append((token, status['remaining']))
             
             # If we have available tokens, return the one with the most remaining quota
             if available_tokens:
                 # Sort by remaining quota (descending) and return the best one
                 available_tokens.sort(key=lambda x: x[1], reverse=True)
                 best_token = available_tokens[0][0]
+                self.token_status[best_token]['in_flight'] = (
+                    self.token_status[best_token].get('in_flight', 0) + 1
+                )
                 # Update current_index to the selected token for round-robin tracking
                 try:
                     self.current_index = self.tokens.index(best_token)
                 except ValueError:
                     pass
                 return best_token
+
+            if has_token_with_quota:
+                # Tokens have quota but are currently checked out by other workers.
+                return None, 1.0
             
             # All tokens exhausted or below threshold, find minimum wait time
             valid_statuses = [
@@ -670,6 +947,13 @@ class TokenManager:
                 # If reset time has passed, wait a short time to allow token to be ready
                 wait_time = 2
             return None, wait_time
+
+    def release_token(self, token: str):
+        """Release a token checked out by get_available_token."""
+        with self.lock:
+            if token in self.token_status:
+                in_flight = self.token_status[token].get('in_flight', 0)
+                self.token_status[token]['in_flight'] = max(0, in_flight - 1)
     
     def update_rate_limit(self, token: str, remaining: int, reset_time: int):
         """Update rate limit info for a token."""
@@ -707,11 +991,11 @@ class TokenManager:
                 if status['remaining'] <= 0:
                     if status['reset_time'] > 0:
                         recovery_seconds = max(0, status['reset_time'] - current_time)
-                        token_mask = f"{token[:8]}...{token[-4:]}"
+                        token_mask = mask_token(token)
                         rate_limited.append((token_mask, recovery_seconds))
                     else:
                         # Rate limited but no reset time available
-                        token_mask = f"{token[:8]}...{token[-4:]}"
+                        token_mask = mask_token(token)
                         rate_limited.append((token_mask, -1))  # -1 indicates unknown recovery time
             
             return rate_limited
@@ -731,13 +1015,17 @@ class ProgressTracker:
         self.criteria_version_file = os.path.join(progress_dir, 'criteria_version.txt')
         self.processed_prs: Dict[str, Set[int]] = {}
         self._load_progress()
-        
+
+        # Per-repo recheck tracking: which repos have been fully re-examined
+        # under the current FILTERING_CRITERIA_VERSION.
+        self.rechecked_repos_file = os.path.join(progress_dir, 'rechecked_repos.json')
+        self.rechecked_repos: Set[str] = set()
+        self._load_rechecked_repos()
+
         # Check if filtering criteria have changed
         self.criteria_changed = self._check_criteria_changed()
         if self.criteria_changed:
             log(f"Filtering criteria version changed. All PRs will be re-checked.")
-            # Clear processed PRs if criteria changed (optional - we can also just re-check)
-            # For now, we'll keep the processed list but re-check everything
     
     def _load_progress(self):
         """Load progress from disk."""
@@ -771,16 +1059,19 @@ class ProgressTracker:
         """Check if filtering criteria version has changed."""
         if self.force_recheck_all:
             return True
-        
+
         current_version = FILTERING_CRITERIA_VERSION
         if os.path.exists(self.criteria_version_file):
             try:
                 with open(self.criteria_version_file, 'r') as f:
                     saved_version = f.read().strip()
                 if saved_version != current_version:
+                    # Update version file so next run won't re-check everything
+                    self._save_criteria_version()
                     return True
             except Exception as e:
                 log(f"Warning: Could not read criteria version file: {e}")
+                self._save_criteria_version()
                 return True
         else:
             # First run, save current version
@@ -794,33 +1085,84 @@ class ProgressTracker:
                 f.write(FILTERING_CRITERIA_VERSION)
         except Exception as e:
             log(f"Warning: Could not save criteria version: {e}")
-    
-    def _save_progress(self):
-        """Save progress to disk."""
+
+    def _load_rechecked_repos(self):
+        """Load set of repos fully re-examined under current criteria version."""
+        if not os.path.exists(self.rechecked_repos_file):
+            return
+        try:
+            with open(self.rechecked_repos_file, 'r') as f:
+                data = json.load(f)
+            if data.get('version') == FILTERING_CRITERIA_VERSION:
+                self.rechecked_repos = set(data.get('repos', []))
+                log(f"Loaded {len(self.rechecked_repos)} repos already rechecked under {FILTERING_CRITERIA_VERSION}")
+            else:
+                log(f"Rechecked repos file is from version {data.get('version')}, current is {FILTERING_CRITERIA_VERSION}. Clearing.")
+                self.rechecked_repos = set()
+        except Exception:
+            self.rechecked_repos = set()
+
+    def is_repo_rechecked(self, repo_full_name: str) -> bool:
+        """True if this repo was fully processed under the current criteria version."""
+        return repo_full_name in self.rechecked_repos
+
+    def mark_repo_rechecked(self, repo_full_name: str):
         with self.lock:
-            # Convert sets to lists for JSON serialization
-            data = {k: list(v) for k, v in self.processed_prs.items()}
-            with open(self.processed_prs_file, 'w') as f:
+            self.rechecked_repos.add(repo_full_name)
+            if len(self.rechecked_repos) % 200 == 0:
+                self._save_rechecked_repos_unlocked()
+
+    def _save_rechecked_repos_unlocked(self):
+        data = {'version': FILTERING_CRITERIA_VERSION, 'repos': list(self.rechecked_repos)}
+        tmp = f"{self.rechecked_repos_file}.{os.getpid()}.tmp"
+        try:
+            with open(tmp, 'w') as f:
                 json.dump(data, f)
-    
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.rechecked_repos_file)
+        except Exception as e:
+            log(f"Warning: could not save rechecked repos: {e}")
+
+    def save_rechecked_repos(self):
+        with self.lock:
+            self._save_rechecked_repos_unlocked()
+
+    def _save_progress(self):
+        """Save progress to disk atomically (write tmp → fsync → rename)."""
+        with self.lock:
+            data = {k: list(v) for k, v in self.processed_prs.items()}
+            tmp_file = f"{self.processed_prs_file}.{os.getpid()}.tmp"
+            with open(tmp_file, 'w') as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, self.processed_prs_file)
+
     def is_pr_processed(self, repo_full_name: str, pr_number: int) -> bool:
-        """Check if a PR has been processed.
-        
-        Returns False if criteria changed or force_recheck_all is True,
-        allowing PRs to be re-checked even if previously processed.
+        """Check if a PR has been processed under the current criteria version.
+
+        Returns False (= needs re-check) when:
+          - force_recheck_all is set, OR
+          - the repo has NOT been rechecked under the current criteria version
         """
-        if self.criteria_changed or self.force_recheck_all:
-            return False  # Force re-check
+        if self.force_recheck_all:
+            return False
+        if not self.is_repo_rechecked(repo_full_name):
+            return False
         with self.lock:
             return pr_number in self.processed_prs.get(repo_full_name, set())
-    
+
     def mark_pr_processed(self, repo_full_name: str, pr_number: int):
         """Mark a PR as processed."""
         with self.lock:
             if repo_full_name not in self.processed_prs:
                 self.processed_prs[repo_full_name] = set()
             self.processed_prs[repo_full_name].add(pr_number)
-        self._save_progress()
+            self._dirty_count = getattr(self, '_dirty_count', 0) + 1
+        if self._dirty_count >= 50:
+            self._dirty_count = 0
+            self._save_progress()
     
     def get_last_processed_pr(self, repo_full_name: str) -> Optional[int]:
         """Get the last processed PR number for a repo (for pagination optimization)."""
@@ -830,16 +1172,62 @@ class ProgressTracker:
 
 
 class GitHubClient:
-    """GitHub API client with multi-token support."""
+    """GitHub API client with multi-token and fixed proxy support."""
     
-    def __init__(self, token_manager: TokenManager):
+    def __init__(
+        self,
+        token_manager: TokenManager,
+        token_proxy_map: Optional[Dict[str, Dict[str, str]]] = None,
+    ):
         self.token_manager = token_manager
+        self.token_proxy_map = token_proxy_map or {}
+        self.sessions = {
+            token: make_requests_session(self.token_proxy_map.get(token))
+            for token in self.token_manager.tokens
+        }
+
+    def _session_for_token(self, token: str) -> requests.Session:
+        """Return the session pinned to this token's proxy."""
+        if token not in self.sessions:
+            self.sessions[token] = make_requests_session(self.token_proxy_map.get(token))
+        return self.sessions[token]
+
+    @staticmethod
+    def _rate_limit_resource(url: str, response: requests.Response) -> str:
+        """Return the GitHub rate-limit resource for a response.
+
+        GitHub Search API uses a separate 30 req/min bucket. A successful search
+        response with remaining=29 must not replace the token's core quota.
+        """
+        resource = response.headers.get("X-RateLimit-Resource", "").lower()
+        if resource:
+            return resource
+        if "/search/" in url:
+            return "search"
+        return "core"
+
+    def _update_token_rate_limit(
+        self,
+        token: str,
+        url: str,
+        response: requests.Response,
+        *,
+        force: bool = False,
+    ) -> None:
+        resource = self._rate_limit_resource(url, response)
+        if resource == "search" and not force:
+            return
+
+        remaining = int(response.headers.get("X-RateLimit-Remaining", 5000))
+        reset_time = int(response.headers.get("X-RateLimit-Reset", 0))
+        self.token_manager.update_rate_limit(token, remaining, reset_time)
     
     def make_request(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
         """Make a GitHub API request with automatic token rotation."""
         max_retries = 3
+        attempt = 0
         
-        for attempt in range(max_retries):
+        while attempt < max_retries:
             result = self.token_manager.get_available_token()
             
             if isinstance(result, tuple):
@@ -855,54 +1243,62 @@ class GitHubClient:
                             log(f"  - {token_mask}: 恢复时间 {recovery_str}")
                         else:
                             log(f"  - {token_mask}: 恢复时间未知")
-                else:
+                elif wait_time > 1:
                     log(f"All tokens exhausted. Waiting {wait_time:.0f} seconds...")
                 time.sleep(wait_time)
                 continue
             
             token = result
+            attempt += 1
             headers = {
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github.v3+json"
             }
             
             try:
-                response = requests.get(url, headers=headers, params=params, timeout=90)
-                
-                # Update rate limit info
-                remaining = int(response.headers.get('X-RateLimit-Remaining', 5000))
-                reset_time = int(response.headers.get('X-RateLimit-Reset', 0))
-                self.token_manager.update_rate_limit(token, remaining, reset_time)
-                
-                if response.status_code == 200:
-                    # Add small delay between requests to avoid exhausting quota too quickly
-                    # This helps distribute requests across time and reduces rate limiting
-                    time.sleep(API_REQUEST_DELAY)
-                    return response.json()
-                elif response.status_code == 403:
-                    if 'rate limit' in response.text.lower():
-                        # Rate limit hit, rotate silently
-                        self.token_manager.update_rate_limit(token, 0, reset_time)
+                response = None
+                try:
+                    session = self._session_for_token(token)
+                    response = session.get(url, headers=headers, params=params, timeout=GITHUB_API_TIMEOUT)
+
+                    self._update_token_rate_limit(token, url, response)
+
+                    if response.status_code == 200:
+                        # Add small delay between requests to avoid exhausting quota too quickly
+                        # This helps distribute requests across time and reduces rate limiting
+                        time.sleep(API_REQUEST_DELAY)
+                        return response.json()
+                    elif response.status_code == 403:
+                        if 'rate limit' in response.text.lower():
+                            # Rate limit hit, rotate silently
+                            self._update_token_rate_limit(token, url, response, force=True)
+                            continue
+                        elif 'suspended' in response.text.lower():
+                            self.token_manager.mark_invalid(token)
+                            continue
+                        else:
+                            log(f"Forbidden: {response.text[:100]}")
+                            return None
+                    elif response.status_code == 404:
+                        return None
+                    elif response.status_code == 401:
+                        log(f"Token invalid, marking as unusable")
+                        self.token_manager.mark_invalid(token)
+                        continue
+                    elif response.status_code in (500, 502, 503, 504):
+                        # Server error, retry silently
+                        time.sleep(ERROR_RETRY_DELAY)
                         continue
                     else:
-                        log(f"Forbidden: {response.text[:100]}")
+                        # Don't print HTML error pages
+                        error_text = response.text[:100] if not response.text.strip().startswith('<!') else f"HTTP {response.status_code}"
+                        if response.status_code not in (404, 422):  # Skip common expected errors
+                            log(f"API error {response.status_code}: {error_text}")
                         return None
-                elif response.status_code == 404:
-                    return None
-                elif response.status_code == 401:
-                    log(f"Token invalid, marking as unusable")
-                    self.token_manager.mark_invalid(token)
-                    continue
-                elif response.status_code in (500, 502, 503, 504):
-                    # Server error, retry silently
-                    time.sleep(ERROR_RETRY_DELAY)
-                    continue
-                else:
-                    # Don't print HTML error pages
-                    error_text = response.text[:100] if not response.text.strip().startswith('<!') else f"HTTP {response.status_code}"
-                    if response.status_code not in (404, 422):  # Skip common expected errors
-                        log(f"API error {response.status_code}: {error_text}")
-                    return None
+                finally:
+                    if response is not None:
+                        response.close()
+                    self.token_manager.release_token(token)
                     
             except requests.exceptions.Timeout:
                 # Retry silently on timeout
@@ -918,8 +1314,9 @@ class GitHubClient:
     def get_diff(self, url: str) -> Optional[str]:
         """Get diff content from a URL."""
         max_retries = 3
+        attempt = 0
         
-        for attempt in range(max_retries):
+        while attempt < max_retries:
             result = self.token_manager.get_available_token()
             
             if isinstance(result, tuple):
@@ -935,34 +1332,47 @@ class GitHubClient:
                             log(f"  - {token_mask}: 恢复时间 {recovery_str}")
                         else:
                             log(f"  - {token_mask}: 恢复时间未知")
+                elif wait_time > 1:
+                    log(f"All tokens busy (diff request). Waiting {wait_time:.0f} seconds...")
                 # Wait for rate limit reset
                 time.sleep(wait_time)
                 continue  # Retry after waiting
             
             token = result
+            attempt += 1
             headers = {
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github.v3.diff"
             }
             
             try:
-                response = requests.get(url, headers=headers, timeout=120)
-                
-                remaining = int(response.headers.get('X-RateLimit-Remaining', 5000))
-                reset_time = int(response.headers.get('X-RateLimit-Reset', 0))
-                self.token_manager.update_rate_limit(token, remaining, reset_time)
-                
-                if response.status_code == 200:
-                    # Add small delay between requests to avoid exhausting quota too quickly
-                    time.sleep(API_REQUEST_DELAY)
-                    return response.text
-                elif response.status_code == 403:
-                    if 'rate limit' in response.text.lower():
-                        # Rate limit hit, wait and retry
-                        self.token_manager.update_rate_limit(token, 0, reset_time)
-                        time.sleep(DIFF_RATE_LIMIT_DELAY)
-                        continue
-                # Silently handle other errors for diff retrieval
+                response = None
+                try:
+                    session = self._session_for_token(token)
+                    response = session.get(url, headers=headers, timeout=GITHUB_DIFF_TIMEOUT)
+
+                    remaining = int(response.headers.get('X-RateLimit-Remaining', 5000))
+                    reset_time = int(response.headers.get('X-RateLimit-Reset', 0))
+                    self.token_manager.update_rate_limit(token, remaining, reset_time)
+
+                    if response.status_code == 200:
+                        # Add small delay between requests to avoid exhausting quota too quickly
+                        time.sleep(API_REQUEST_DELAY)
+                        return response.text
+                    elif response.status_code == 403:
+                        if 'rate limit' in response.text.lower():
+                            # Rate limit hit, wait and retry
+                            self.token_manager.update_rate_limit(token, 0, reset_time)
+                            time.sleep(DIFF_RATE_LIMIT_DELAY)
+                            continue
+                        elif 'suspended' in response.text.lower():
+                            self.token_manager.mark_invalid(token)
+                            continue
+                    # Silently handle other errors for diff retrieval
+                finally:
+                    if response is not None:
+                        response.close()
+                    self.token_manager.release_token(token)
             except requests.exceptions.Timeout:
                 # Retry silently on timeout
                 time.sleep(ERROR_RETRY_DELAY)
@@ -1161,7 +1571,6 @@ def process_repo_prs(
     page = 1
     per_page = 100
     processed_count = 0
-    rechecked_count = 0  # Count of PRs rechecked due to criteria change
     
     # PR filtering statistics
     pr_stats = {
@@ -1209,24 +1618,12 @@ def process_repo_prs(
             pr_number = pr['number']
             pr_stats['prs_scanned'] += 1
             
-            # Smart skip logic: 
-            # - If criteria changed or force_recheck_all, always re-check
-            # - If repo was already qualifying and criteria haven't changed, skip processed PRs
-            # - Otherwise, re-check all PRs because filtering criteria may have changed
+            # Skip PRs already checked under the current criteria version.
+            # is_pr_processed returns False for repos not yet rechecked,
+            # forcing a re-evaluation against the (possibly relaxed) criteria.
             if progress.is_pr_processed(full_name, pr_number):
-                # PR was processed before
-                if progress.criteria_changed or progress.force_recheck_all:
-                    # Criteria changed, re-check this PR
-                    rechecked_count += 1
-                    # Continue to process it (don't skip)
-                elif repo_was_qualifying:
-                    # Repo was qualifying and criteria haven't changed, skip
-                    processed_count += 1
-                    continue
-                else:
-                    # Repo wasn't qualifying, re-check
-                    rechecked_count += 1
-                    # Continue to process it (don't skip)
+                processed_count += 1
+                continue
             
             # Quick check: must be merged
             if not pr.get('merged_at'):
@@ -1424,7 +1821,8 @@ def process_repo_prs(
         # Safety limit on pages
         if page > 20:
             break
-    
+
+    progress.mark_repo_rechecked(full_name)
     return qualifying_prs, pr_stats
 
 
@@ -1665,7 +2063,15 @@ def check_repo_recently_active(pushed_at: str, max_days: int = MAX_DAYS_SINCE_PU
         return False
 
 
-def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MIN_STARS, target_repo_count: int = 100) -> Tuple[List[dict], dict]:
+def get_candidate_repos(
+    client: GitHubClient,
+    language: str,
+    min_stars: int = MIN_STARS,
+    target_repo_count: int = 100,
+    skip_full_names: Optional[Set[str]] = None,
+    fast_pass_repos: Optional[Set[str]] = None,
+    max_candidates_override: Optional[int] = None,
+) -> Tuple[List[dict], dict]:
     """
     Get candidate repositories for a language that have merged PRs (OPTIMIZED v2.0).
     
@@ -1694,9 +2100,11 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
     # Calculate dynamic search limit based on target_repo_count
     # Multiply by 5 because not every candidate repo will have qualifying PRs
     # Minimum 200 to ensure reasonable search coverage
-    max_candidates = max(target_repo_count * 5, 200)
-    
+    max_candidates = max_candidates_override or max(target_repo_count * 5, 200)
+
     repos = []
+    skip_full_names = skip_full_names or set()
+    fast_pass_repos = fast_pass_repos or set()
     page = 1
     language_normalized = language.capitalize()  # Handle case variations (Python vs python)
     
@@ -1727,18 +2135,33 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
     
     while len(repos) < max_candidates:
         # Segmented search by star ranges to bypass GitHub's 1000-result limit.
-        # Each segment query covers a star range (e.g., 50..100, 100..200, etc.)
-        # This allows finding repos that would otherwise be cut off.
+        # Fine-grained segments ensure we can discover repos beyond the 1000-result cap.
         star_segments = []
+        if min_stars < 20:
+            star_segments.append((min_stars, 19))
+        if min_stars < 35:
+            star_segments.append((max(min_stars, 20), 34))
+        if min_stars < 50:
+            star_segments.append((max(min_stars, 35), 49))
+        if min_stars < 75:
+            star_segments.append((max(min_stars, 50), 74))
         if min_stars < 100:
-            star_segments.append((min_stars, 99))
+            star_segments.append((max(min_stars, 75), 99))
+        if min_stars < 150:
+            star_segments.append((max(min_stars, 100), 149))
         if min_stars < 200:
-            star_segments.append((max(min_stars, 100), 199))
+            star_segments.append((max(min_stars, 150), 199))
+        if min_stars < 300:
+            star_segments.append((max(min_stars, 200), 299))
         if min_stars < 500:
-            star_segments.append((max(min_stars, 200), 499))
-        star_segments.append((max(min_stars, 500), 999))
-        star_segments.append((max(min_stars, 1000), 4999))
-        star_segments.append((max(min_stars, 5000), 1000000))
+            star_segments.append((max(min_stars, 300), 499))
+        star_segments.append((max(min_stars, 500), 749))
+        star_segments.append((max(min_stars, 750), 999))
+        star_segments.append((max(min_stars, 1000), 1999))
+        star_segments.append((max(min_stars, 2000), 4999))
+        star_segments.append((max(min_stars, 5000), 9999))
+        star_segments.append((max(min_stars, 10000), 49999))
+        star_segments.append((max(min_stars, 50000), 1000000))
         # Remove segments where low >= high
         star_segments = [(lo, hi) for lo, hi in star_segments if lo <= hi]
 
@@ -1780,6 +2203,32 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
                     repo_name = item['name']
                     full_name = f"{owner}/{repo_name}"
 
+                    if full_name in skip_full_names:
+                        continue
+
+                    # Fast-pass: repo was already processed under older criteria.
+                    # Since criteria only got more relaxed, it still passes all
+                    # repo-level filters. Skip the expensive API checks.
+                    if full_name in fast_pass_repos:
+                        pushed_at = item.get('pushed_at', '')
+                        repos.append({
+                            'owner': owner,
+                            'repo': repo_name,
+                            'full_name': full_name,
+                            'stars': item['stargazers_count'],
+                            'language': language,
+                            'default_branch': item['default_branch'],
+                            'pr_count': 0,
+                            'pushed_at': pushed_at,
+                        })
+                        continue
+
+                    if total_repos_seen % 100 == 0:
+                        log(
+                            f"[{language}] Candidate search progress: "
+                            f"seen={total_repos_seen}, candidates={len(repos)}/{max_candidates}"
+                        )
+
                     # Skip archived repos (double check)
                     if item.get('archived', False):
                         skipped_stats['archived'] += 1
@@ -1795,9 +2244,10 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
                         skipped_stats['excluded_name'] += 1
                         continue
 
-                    # Check if recently active (pushed within last 3 years)
+                    # Check if recently active (per-language max days)
                     pushed_at = item.get('pushed_at', '')
-                    if not check_repo_recently_active(pushed_at):
+                    lang_max_days = get_lang_config(language, 'MAX_DAYS_SINCE_PUSH')
+                    if not check_repo_recently_active(pushed_at, max_days=lang_max_days):
                         skipped_stats['inactive'] += 1
                         continue
 
@@ -1817,16 +2267,15 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
                     if not has_ci_config:
                         skipped_stats['no_ci_config'] += 1
 
-                    # Check merged PR count
-                    pr_search_url = f"{GITHUB_API_URL}/search/issues"
+                    # Check merged PR count using REST API (avoids Search API 30/min limit)
+                    pr_list_url = f"{GITHUB_API_URL}/repos/{owner}/{repo_name}/pulls"
                     pr_params = {
-                        'q': f'repo:{owner}/{repo_name} type:pr is:merged',
-                        'per_page': 1
+                        'state': 'closed',
+                        'per_page': 1,
                     }
-                    pr_data = client.make_request(pr_search_url, pr_params)
-
+                    pr_data = client.make_request(pr_list_url, pr_params)
                     lang_min_prs = get_lang_config(language, 'MIN_MERGED_PRS')
-                    if not pr_data or pr_data.get('total_count', 0) < lang_min_prs:
+                    if not pr_data or not isinstance(pr_data, list) or len(pr_data) == 0:
                         skipped_stats['low_pr_count'] += 1
                         continue
 
@@ -1837,7 +2286,7 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
                         'stars': item['stargazers_count'],
                         'language': language,
                         'default_branch': item['default_branch'],
-                        'pr_count': pr_data.get('total_count', 0),
+                        'pr_count': 0,
                         'pushed_at': pushed_at,
                     })
 
@@ -1860,6 +2309,11 @@ def get_candidate_repos(client: GitHubClient, language: str, min_stars: int = MI
     }
     
     return repos, repo_stats
+
+
+def get_candidate_search_target(existing_count: int, repo_num: int) -> int:
+    """Return how many additional qualifying repos this run still needs."""
+    return max(0, repo_num - existing_count)
 
 
 class QualifyingRepoTracker:
@@ -1893,6 +2347,10 @@ class QualifyingRepoTracker:
     def get_qualifying_count(self, language: str) -> int:
         with self.lock:
             return len(self.qualifying_repos.get(language, set()))
+
+    def get_qualifying_repos(self, language: str) -> Set[str]:
+        with self.lock:
+            return set(self.qualifying_repos.get(language, set()))
     
     def is_repo_qualifying(self, language: str, full_name: str) -> bool:
         with self.lock:
@@ -2141,7 +2599,7 @@ def main():
         help="Number of repositories WITH QUALIFYING PRs to collect per language (not candidate repos)."
     )
     parser.add_argument(
-        "--output_dir", type=str, default="artifacts/collected_prs",
+        "--output_dir", type=str, default="collected_prs",
         help="Directory to save collected data."
     )
     parser.add_argument(
@@ -2158,6 +2616,13 @@ def main():
         help="Maximum QUALIFYING PRs to collect per repository"
     )
     parser.add_argument(
+        "--max-candidate-repos", type=int, default=None,
+        help=(
+            "Maximum candidate repositories to inspect per language. "
+            "Defaults to a broad batch-oriented search; set a small value for smoke tests."
+        ),
+    )
+    parser.add_argument(
         "--force-recheck-all", action="store_true",
         help="Force re-check all PRs, even if they were processed before. "
              "Useful when filtering criteria have changed."
@@ -2165,42 +2630,81 @@ def main():
     
     args = parser.parse_args()
     
-    # Get tokens from environment + gh_token.txt
-    tokens = []
+    tokens, token_proxy_map = load_collection_tokens_from_file(COLLECT_GITHUB_TOKEN_FILE)
+    proxy_loaded = len(token_proxy_map)
+    print(
+        f"Loaded {len(tokens)} tokens from {COLLECT_GITHUB_TOKEN_FILE} "
+        f"({proxy_loaded} with inline proxy)"
+    )
 
-    # 1. From GITHUB_TOKENS env var (comma-separated)
-    tokens_str = os.environ.get('GITHUB_TOKENS', '')
-    if tokens_str:
-        env_tokens = [t.strip() for t in tokens_str.split(',') if t.strip()]
+    env_tokens = load_collection_tokens_from_env()
+    if env_tokens:
         tokens.extend(env_tokens)
-        print(f"Loaded {len(env_tokens)} tokens from GITHUB_TOKENS env var")
+        print(f"Loaded {len(env_tokens)} tokens from GITHUB_TOKENS/GITHUB_TOKEN env")
 
-    # 2. From gh_token.txt (one token per line), prefer repo-local path
-    _script_dir = os.path.dirname(os.path.abspath(__file__))
-    _project_root = os.path.dirname(_script_dir)
-    token_files = [
-        os.path.join(_project_root, 'gh_token.txt'),
-        os.path.expanduser('~/gh_token.txt'),
+    # From explicit proxy mapping sources. These override inline mappings.
+    token_proxy_map.update(load_token_proxy_mapping_from_env())
+    proxy_files = [
+        '/home/ywxzml3j/ywxzml3juser23/SWE-gen/github_token_proxies.txt',
+        '/home/ywxzml3j/ywxzml3juser23/SWE-gen/gh_token_proxies.txt',
+        '/home/ywxzml3j/ywxzml3juser23/SWE-gen/token_proxies.txt',
+        '/home/ywxzml3j/ywxzml3juser23/harbor/github_token_proxies.txt',
+        '/home/ywxzml3j/ywxzml3juser23/harbor/gh_token_proxies.txt',
     ]
-    for gh_token_file in token_files:
-        if os.path.exists(gh_token_file):
-            with open(gh_token_file, 'r') as f:
-                file_tokens = [line.strip() for line in f if line.strip()]
-            tokens.extend(file_tokens)
-            print(f"Loaded {len(file_tokens)} tokens from {gh_token_file}")
+    token_proxy_map.update(load_token_proxy_mapping_from_files(proxy_files))
 
-    # 3. Deduplicate while preserving order
+    # Deduplicate while preserving order
     tokens = list(dict.fromkeys(tokens))
     print(f"Total unique tokens: {len(tokens)}")
 
     if not tokens:
-        print("Error: No GitHub tokens found. Set GITHUB_TOKENS env var or provide gh_token.txt.")
+        print(f"Error: No GitHub tokens found. Provide {COLLECT_GITHUB_TOKEN_FILE}.")
         return
+
+    token_limit_raw = os.environ.get("COLLECT_TOKEN_LIMIT", "32").strip()
+    try:
+        token_limit = int(token_limit_raw)
+    except ValueError:
+        token_limit = 32
+    original_token_count = len(tokens)
+    tokens, token_proxy_map = select_collection_tokens(tokens, token_proxy_map, token_limit)
+    if token_limit > 0 and len(tokens) < original_token_count:
+        print(
+            f"Using first {len(tokens)}/{original_token_count} token(s) for this collector "
+            f"(COLLECT_TOKEN_LIMIT={token_limit}; set 0 to validate all)."
+        )
+
+    require_proxy_isolation = os.environ.get(
+        'GITHUB_REQUIRE_PROXY_ISOLATION', '1'
+    ).strip().lower() not in {'0', 'false', 'no', 'off'}
+
+    if require_proxy_isolation and len(tokens) > 1:
+        missing_proxy_tokens = [token for token in tokens if token not in token_proxy_map]
+        if missing_proxy_tokens:
+            original_token_count = len(tokens)
+            tokens = [tokens[0]]
+            token_proxy_map = {
+                token: proxy_dict
+                for token, proxy_dict in token_proxy_map.items()
+                if token in tokens
+            }
+            print("\nWARNING: multiple GitHub tokens were found, but fixed proxy mappings are missing.")
+            print(
+                f"To keep IP isolation safe, this run will use only 1/{original_token_count} token(s): "
+                f"{mask_token(tokens[0])}"
+            )
+            print("To use all tokens, add proxies using one of these formats:")
+            print("  gh_token.txt line:              <token> <proxy_url>")
+            print("  github_token_proxies.txt line:  <token> <proxy_url>")
+            print("  GITHUB_TOKEN_PROXIES env:       token1=http://proxy1,token2=socks5://proxy2")
+            print("To intentionally use all tokens from one IP, set GITHUB_REQUIRE_PROXY_ISOLATION=0.")
+
+    log_proxy_isolation_summary(tokens, token_proxy_map)
     
     print(f"Found {len(tokens)} GitHub token(s), validating...")
     
     # Validate tokens and filter out invalid ones, get rate limit info
-    valid_tokens, token_rate_limits = validate_github_tokens(tokens)
+    valid_tokens, token_rate_limits = validate_github_tokens(tokens, token_proxy_map)
     
     if not valid_tokens:
         print("Error: No valid GitHub tokens found. Please check your tokens.")
@@ -2208,7 +2712,7 @@ def main():
     
     # Check if all tokens are rate limited using /rate_limit API
     print("\nChecking rate limit status for all tokens...")
-    detailed_rate_limits = check_token_rate_limits(valid_tokens)
+    detailed_rate_limits = check_token_rate_limits(valid_tokens, token_proxy_map)
     
     # Check if all tokens are rate limited
     if check_all_tokens_rate_limited(valid_tokens, token_rate_limits):
@@ -2219,7 +2723,7 @@ def main():
         
         current_time = time.time()
         for token in valid_tokens:
-            token_mask = f"{token[:8]}...{token[-4:]}"
+            token_mask = mask_token(token)
             
             # Get rate limit info from detailed check or validation
             if token in detailed_rate_limits:
@@ -2295,8 +2799,13 @@ def main():
     log(f"Auto-setting workers_per_lang to {workers_per_lang} (calculated from quota: {total_quota} / 1000 = {total_quota // 1000}, max {num_workers}).\n")
     
     # Initialize components with valid tokens and their rate limit info
+    valid_token_proxy_map = {
+        token: token_proxy_map[token]
+        for token in valid_tokens
+        if token in token_proxy_map
+    }
     token_manager = TokenManager(tokens=valid_tokens, initial_rate_limits=token_rate_limits)
-    client = GitHubClient(token_manager)
+    client = GitHubClient(token_manager, token_proxy_map=valid_token_proxy_map)
     
     # Setup output directory
     output_dir = args.output_dir
@@ -2362,12 +2871,45 @@ def main():
             log(f"[{lang}] Already have {existing_count}/{args.repo_num} qualifying repos. Skipping.")
             return
 
-        log(f"[{lang}] Starting... (have {existing_count}/{args.repo_num} qualifying repos)")
+        search_target = get_candidate_search_target(existing_count, args.repo_num)
+        log(
+            f"[{lang}] Starting... (have {existing_count}/{args.repo_num} qualifying repos, "
+            f"need {search_target} more)"
+        )
+
+        # Skip repos from candidate search:
+        # 1. Already-qualifying repos (their PRs are already collected)
+        # 2. Repos fully rechecked under the current criteria version that
+        #    didn't qualify — no point re-scanning them again.
+        # Repos processed only under OLDER criteria are NOT skipped so their
+        # PRs can be re-evaluated against the (possibly relaxed) filters.
+        already_qualifying = qualifying_tracker.get_qualifying_repos(lang)
+        rechecked_non_qualifying = {
+            repo for repo in progress.rechecked_repos
+            if repo not in already_qualifying
+        }
+        skip_repos = already_qualifying | rechecked_non_qualifying
+        log(
+            f"[{lang}] skip_repos: {len(skip_repos)} "
+            f"(qualifying={len(already_qualifying)}, "
+            f"rechecked_non_qual={len(rechecked_non_qualifying)})"
+        )
+
+        # Repos previously processed (under any criteria version) already passed
+        # all repo-level checks.  Since we only relax criteria, they still pass —
+        # skip the expensive per-repo API calls (language %, CI, deps) for them.
+        needs_pr_recheck = {
+            repo for repo in progress.processed_prs
+            if repo not in skip_repos and not progress.is_repo_rechecked(repo)
+        }
 
         candidates, repo_stats = get_candidate_repos(
             client, lang,
             min_stars=get_lang_config(lang, 'MIN_STARS'),
-            target_repo_count=args.repo_num
+            target_repo_count=args.repo_num,
+            skip_full_names=skip_repos,
+            fast_pass_repos=needs_pr_recheck,
+            max_candidates_override=args.max_candidate_repos,
         )
 
         filtering_stats.init_language(lang)
@@ -2382,7 +2924,16 @@ def main():
             c for c in candidates
             if not qualifying_tracker.is_repo_qualifying(lang, c['full_name'])
         ]
-        
+
+        if not candidates_to_process:
+            log(
+                f"[{lang}] No new candidate repos found (skipped {len(skip_repos)} "
+                f"already-processed repos). GitHub Search may be exhausted for current "
+                f"star range / filters."
+            )
+            return
+
+        log(f"[{lang}] {len(candidates_to_process)} new candidate repos to process")
 
         # Process repos one by one until we have enough qualifying repos
         qualifying_count_for_lang = existing_count
@@ -2390,7 +2941,7 @@ def main():
 
         # Parallel repo processing within each language (use 3 workers per language)
         # With 8 languages × 3 workers = 24 total threads, well within 99 token capacity
-        repo_workers = min(10, len(candidates_to_process))
+        repo_workers = min(workers_per_lang, len(candidates_to_process))
 
         def _process_single_repo(repo_info):
             """Process a single repo and return (prs, pr_stats, repo_info) or None."""
@@ -2526,7 +3077,11 @@ def main():
     
     # Save filtering statistics report
     filtering_stats.save_summary_report()
-    
+
+    # Flush any remaining unsaved progress
+    progress._save_progress()
+    progress.save_rechecked_repos()
+
     # Print filtering statistics summary
     stats_summary = filtering_stats.get_summary()
     log(f"\n{'='*60}")
