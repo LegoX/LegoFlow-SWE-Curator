@@ -189,10 +189,10 @@ For each validation attempt, increment the run number (-1, -2, -3, etc.):
 
 ```bash
 # Test NOP - should get reward=0
-harbor run --agent nop -p {dataset_path} -t {task_id} --jobs-dir {jobs_dir}/{task_id}-nop-1 --no-delete --env {environment}
+harbor run --agent nop -p {dataset_path} -i {task_id} --jobs-dir {jobs_dir}/{task_id}-nop-1 --no-delete --env {environment}
 
 # Test Oracle - should get reward=1
-harbor run --agent oracle -p {dataset_path} -t {task_id} --jobs-dir {jobs_dir}/{task_id}-oracle-1 --env {environment}
+harbor run --agent oracle -p {dataset_path} -i {task_id} --jobs-dir {jobs_dir}/{task_id}-oracle-1 --env {environment}
 ```
 
 If you need to re-run after fixing issues, increment the number:
@@ -651,10 +651,10 @@ For each validation attempt, increment the run number (-1, -2, -3, etc.):
 
 ```bash
 # Test NOP - should get reward=0 (tests FAIL on buggy code)
-harbor run --agent nop -p {dataset_path} -t {task_id} --jobs-dir {jobs_dir}/{task_id}-nop-1 --no-delete --env {environment}
+harbor run --agent nop -p {dataset_path} -i {task_id} --jobs-dir {jobs_dir}/{task_id}-nop-1 --no-delete --env {environment}
 
 # Test Oracle - should get reward=1 (tests PASS after applying fix)
-harbor run --agent oracle -p {dataset_path} -t {task_id} --jobs-dir {jobs_dir}/{task_id}-oracle-1 --env {environment}
+harbor run --agent oracle -p {dataset_path} -i {task_id} --jobs-dir {jobs_dir}/{task_id}-oracle-1 --env {environment}
 ```
 
 If you need to re-run after fixing issues, increment the number:

@@ -429,8 +429,8 @@ def _display_next_steps_panel(
     steps.add_row("1.", "Confirm validation results match expectations; review Logs for mismatches")
     steps.add_row("2.", "Review generated files (especially Dockerfile)")
     steps.add_row("3.", "Review instruction.md and task.toml")
-    steps.add_row("4.", f"Harbor nop: harbor run --agent nop -p {harbor_root} -t {task_id}")
-    steps.add_row("5.", f"Harbor oracle: harbor run --agent oracle -p {harbor_root} -t {task_id}")
+    steps.add_row("4.", f"Harbor nop: harbor run --agent nop -p {harbor_root} -i {task_id}")
+    steps.add_row("5.", f"Harbor oracle: harbor run --agent oracle -p {harbor_root} -i {task_id}")
     steps.add_row(
         "6.", f"Create a pull request including the new task under {harbor_root / task_id}"
     )
