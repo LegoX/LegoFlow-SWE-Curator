@@ -16,7 +16,11 @@ from openai import OpenAI
 from rich.console import Console
 
 from swegen.api_logging import init_api_logger
-from swegen.create.claude_code_utils import Colors, print_sdk_message
+from swegen.create.claude_code_utils import (
+    Colors,
+    get_claude_permission_mode,
+    print_sdk_message,
+)
 
 # API logging setup
 _api_logger_available, log_completion, estimate_tokens = init_api_logger(__file__)
@@ -238,7 +242,7 @@ class TrialClassifier:
         
         # Run Claude Code with file access
         options = ClaudeAgentOptions(
-            permission_mode="bypassPermissions",
+            permission_mode=get_claude_permission_mode(),
             allowed_tools=["Read", "Glob"],
             cwd=str(trial_dir),
             add_dirs=[str(task_dir)],

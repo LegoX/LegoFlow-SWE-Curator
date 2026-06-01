@@ -61,7 +61,7 @@ def run_harbor_agent(
         agent,
         "-p",
         str(dataset_path),
-        "-t",
+        "-i",
         task_id,
         "--jobs-dir",
         str(unique_parent),

@@ -16,7 +16,11 @@ from claude_agent_sdk import (
 )
 
 from swegen.api_logging import init_api_logger
-from swegen.create.claude_code_utils import Colors, print_sdk_message
+from swegen.create.claude_code_utils import (
+    Colors,
+    get_claude_permission_mode,
+    print_sdk_message,
+)
 from swegen.llm_env import get_anthropic_compatible_config
 from swegen.tools.harbor_runner import parse_harbor_outcome
 
@@ -906,7 +910,7 @@ async def _run_claude_code_session_async(
 
         options = ClaudeAgentOptions(
             allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "LS", "Bash"],
-            permission_mode="bypassPermissions",  # Auto-approve actions
+            permission_mode=get_claude_permission_mode(),
             cwd=os.getcwd(),  # Run from project root
             model=model,  # SDK-safe model (fallback-mapped only for non-Claude ids)
             env=sdk_env if sdk_env else None,  # Explicitly pass API config for third-party API

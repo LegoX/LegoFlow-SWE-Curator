@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
@@ -21,6 +23,13 @@ class Colors:
     RED = "\033[91m"  # Errors
     BOLD = "\033[1m"
     RESET = "\033[0m"
+
+
+def get_claude_permission_mode() -> str:
+    """Choose a Claude SDK permission mode that is valid for the current user."""
+    if getattr(os, "geteuid", lambda: -1)() == 0:
+        return "acceptEdits"
+    return "bypassPermissions"
 
 
 def print_sdk_message(message: object) -> None:
