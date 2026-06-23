@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -21,7 +22,7 @@ MAX_PR_BODY_LENGTH = 2500
 MAX_TEST_FILE_LENGTH = 3000  # Max chars per test file
 MAX_TOTAL_TEST_LENGTH = 10000  # Max total chars for all test files
 MIN_INSTRUCTION_LENGTH = 100
-OPENAI_API_TIMEOUT = 90.0
+OPENAI_API_TIMEOUT = float(os.getenv("SWEGEN_OPENAI_API_TIMEOUT", "300"))
 MAX_COMPLETION_TOKENS = 4096
 # Support environment variable for model name (for local model deployment)
 MODEL_NAME = os.getenv("OPENAI_MODEL") or os.getenv("ANTHROPIC_MODEL") or "gpt-5.2"
@@ -116,17 +117,18 @@ EXAMPLE BAD INSTRUCTION:
 permissive regex."
 
 TAGS:
-Generate exactly 3 tags in this order:
+Generate exactly 4 tags in this order:
 1. Primary programming language (e.g., "python", "javascript", "typescript", "go", "rust", "java", "ruby", "cpp")
-2. Tier/area: Choose ONE from: "backend", "frontend", "fullstack", "cli", "library", "framework"
-3. Framework/library name (e.g., "fastapi", "django", "react", "nextjs", "axios", "express") OR a specific category (e.g., "http", "async", "testing")
+2. Area: Choose ONE from: "backend", "frontend", "fullstack", "cli", "library", "framework"
+3. Topic: a framework/library name (e.g., "fastapi", "django", "react", "nextjs", "axios", "express") OR a focused technical topic (e.g., "http", "async", "testing")
+4. Bug class: a domain-independent short label for the defect mechanism, e.g. "missing-fallback", "incomplete-validation", "wrong-default", "type-handling-inconsistency", "missing-metadata-propagation". The bug class should describe the logical failure mode, not the framework or feature area.
 
 Examples:
-- FastAPI backend project: ["python", "backend", "fastapi"]
-- Next.js frontend: ["typescript", "frontend", "nextjs"]
-- Ripgrep CLI tool: ["rust", "cli", "regex"]
+- FastAPI backend bug caused by missing default fallback: ["python", "backend", "fastapi", "missing-fallback"]
+- Next.js UI bug caused by incorrect state propagation: ["typescript", "frontend", "nextjs", "missing-state-propagation"]
+- Python CLI bug caused by incomplete option parsing: ["python", "cli", "argparse", "incomplete-parsing"]
 
-IMPORTANT: Generate exactly 3 tags.
+IMPORTANT: Generate exactly 4 tags.
 
 If NOT substantial, set instruction to null and provide a brief reason.
 
@@ -587,6 +589,12 @@ def evaluate_and_generate_task(
                     parsed_data["reason"] = "PR does not meet substantiality requirements"
                 fields_added.append("reason")
                 logger.warning("LLM response missing 'reason' field, using fallback value")
+
+            if parsed_data.get("is_substantial") and not isinstance(parsed_data.get("tags"), list):
+                # Fallback follows the 4-tag schema [language, area, topic, bug_class].
+                parsed_data["tags"] = ["python", "library", "testing", "unknown-defect"]
+                fields_added.append("tags")
+                logger.warning("LLM response missing valid 'tags' list, using 4-tag fallback value")
             
             # Only log debug info if we actually added fields (to avoid noise for third-party APIs)
             if fields_added:
@@ -602,9 +610,13 @@ def evaluate_and_generate_task(
 
         # Post-process: validate tags if substantial
         if result.is_substantial:
-            if len(result.tags) < 1:
-                logger.error(f"❌ LLM generated only {len(result.tags)} tags")
-                raise RuntimeError(f"LLM generated only {len(result.tags)} tags")
+            if len(result.tags) < 4:
+                logger.error(
+                    f"❌ LLM generated only {len(result.tags)} tags (need 4: [language, area, topic, bug_class])"
+                )
+                raise RuntimeError(
+                    f"LLM generated only {len(result.tags)} tags (need 4: [language, area, topic, bug_class])"
+                )
 
             # Validate instruction length
             if not result.instruction or len(result.instruction.strip()) < MIN_INSTRUCTION_LENGTH:

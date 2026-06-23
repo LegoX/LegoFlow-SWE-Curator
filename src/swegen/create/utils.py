@@ -23,7 +23,7 @@ class CombinedPRTaskEvaluation(BaseModel):
     category: str = Field("bugfix", description="Task category, typically 'bugfix' or 'feature'")
     tags: list[str] = Field(
         default_factory=list,
-        description="Exactly 3 tags: [language, tier, framework/category]. Example: ['python', 'backend', 'fastapi']",
+        description="Exactly 4 tags: [language, area, topic, bug_class]. Example: ['python', 'backend', 'fastapi', 'missing-fallback']",
     )
     task_name: str | None = Field(
         None,

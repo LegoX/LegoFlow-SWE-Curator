@@ -658,9 +658,15 @@ def run_reversal(config: CreateConfig) -> str:
         harbor_do = not config.no_validate
 
         # If CC already validated successfully, skip harbor validation
-        if cc_result and cc_result.success:
+        cc_completed_files = task_has_completed_files(task_dir)
+        if cc_result and cc_result.success and cc_completed_files:
             harbor_do = False
             console.print("[green]✓ Skipping harbor validation (CC already validated)[/green]")
+        elif cc_result and cc_result.success and not cc_completed_files:
+            console.print(
+                "[yellow]⚠ CC reported validation success but task files are incomplete; "
+                "running Harbor validation instead[/yellow]"
+            )
 
         # Auto-validation unless skipped
         results_rows = []
