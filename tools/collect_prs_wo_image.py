@@ -446,18 +446,50 @@ TASK_CANCELLATION_DELAY = 0.5  # Delay for cancelled tasks to finish
 # This ensures that PRs are re-checked when criteria change
 FILTERING_CRITERIA_VERSION = "v2.7"
 
-# Repository filtering thresholds (defaults)
-MIN_STARS = 30                     # Minimum stars (relaxed from 50)
-MIN_MERGED_PRS = 5                 # Minimum merged PRs
-MIN_LANGUAGE_PERCENTAGE = 0.4      # Target language must be >40% of codebase
-MAX_DAYS_SINCE_PUSH = 1095         # 3 years (per-language overrides below)
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int threshold from the environment, falling back to `default`.
+
+    These SWEGEN_PR_* overrides let the SWE-Lego-Live block drive the global
+    filtering thresholds from config.yaml (see scripts/load_runtime_env.sh)
+    without editing this file. Empty/invalid values fall back to the default.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log(f"WARNING: {name}={raw!r} is not an int; using default {default}")
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float threshold from the environment, falling back to `default`."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        log(f"WARNING: {name}={raw!r} is not a float; using default {default}")
+        return default
+
+
+# Repository filtering thresholds (defaults). Each can be overridden globally
+# via the matching SWEGEN_PR_* environment variable; per-language values in
+# LANGUAGE_OVERRIDES below still take precedence when present.
+MIN_STARS = _env_int("SWEGEN_PR_MIN_STARS", 30)                        # Minimum stars (relaxed from 50)
+MIN_MERGED_PRS = _env_int("SWEGEN_PR_MIN_MERGED_PRS", 5)               # Minimum merged PRs
+MIN_LANGUAGE_PERCENTAGE = _env_float("SWEGEN_PR_MIN_LANGUAGE_PERCENTAGE", 0.4)  # Target language must be >40% of codebase
+MAX_DAYS_SINCE_PUSH = _env_int("SWEGEN_PR_MAX_DAYS_SINCE_PUSH", 1095)  # 3 years (per-language overrides below)
 
 # PR filtering thresholds (defaults)
-MIN_ISSUE_BODY_LENGTH = 10         # Minimum issue description length
-MIN_PR_BODY_LENGTH = -1            # No minimum PR body length
-MAX_FILES_CHANGED = 25             # Maximum files changed (relaxed from 20)
-MIN_FILES_CHANGED = 1              # Minimum files changed
-MAX_LINES_CHANGED = 1500           # Maximum lines added + deleted (relaxed from 1000)
+MIN_ISSUE_BODY_LENGTH = _env_int("SWEGEN_PR_MIN_ISSUE_BODY_LENGTH", 10)  # Minimum issue description length
+MIN_PR_BODY_LENGTH = _env_int("SWEGEN_PR_MIN_PR_BODY_LENGTH", -1)        # No minimum PR body length
+MAX_FILES_CHANGED = _env_int("SWEGEN_PR_MAX_FILES_CHANGED", 25)          # Maximum files changed (relaxed from 20)
+MIN_FILES_CHANGED = _env_int("SWEGEN_PR_MIN_FILES_CHANGED", 1)           # Minimum files changed
+MAX_LINES_CHANGED = _env_int("SWEGEN_PR_MAX_LINES_CHANGED", 1500)        # Maximum lines added + deleted (relaxed from 1000)
 
 # Per-language overrides for languages that need tuned thresholds.
 LANGUAGE_OVERRIDES = {
