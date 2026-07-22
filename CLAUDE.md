@@ -2,7 +2,7 @@
 
 This repository is the **core SWE-gen Python package** (`swegen` CLI + `harbor` console
 script + supporting tools). It is consumed as a git submodule from the
-`SWE-Lego-Live` block tree at `subblock/swegen/repos/swegen/`.
+`SWE-Lego-Live` block tree at `subblock/curator/repos/swegen/`.
 
 > **Operational contract lives in the outer block, not here.**
 >
@@ -10,7 +10,7 @@ script + supporting tools). It is consumed as a git submodule from the
 > (Anthropic-format vs. OpenAI-only / proxy), per-language params, the dashboard,
 > and skills, see the outer block's `CLAUDE.md`:
 >
-> `SWE-Lego-Live/subblock/swegen/CLAUDE.md`
+> `SWE-Lego-Live/subblock/curator/CLAUDE.md`
 >
 > Do not edit a duplicate runbook here.
 
@@ -23,11 +23,14 @@ tools/                  # Standalone scripts referenced by the outer block:
   tag_task_metadata.py       # canonical difficulty + 4-tag metadata tagging (JSONL datasets)
 tests/                  # self-contained pytest suite for the package
 artifacts/              # tiny sample fixtures used by quick-verify (e.g. tox-3813)
-pyproject.toml          # editable install via `pip install -e repos/swegen/`
-requirements.txt
+pyproject.toml          # editable install + dependencies via `pip install -e repos/swegen/`
 README.md
 LICENSE
 ```
+
+The `swegen` CLI has four commands: `create` (PRs → verified/scored/tagged
+tasks), `validate` (re-run NOP/Oracle on a task), `analyze` (agent trials +
+outcome classification), and `farm` (stream a repo's full PR history).
 
 ## task.toml metadata tags (4-tag schema)
 

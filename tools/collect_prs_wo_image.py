@@ -3,82 +3,58 @@
 Collect GitHub repositories with qualifying PRs for SWE-bench style dataset creation.
 
 ================================================================================
-OPTIMIZED FILTERING CRITERIA (v2.0)
+FILTERING CRITERIA (v2.7)
 ================================================================================
 
-Repository 筛选条件 (优化后)
-✅ 目标语言占代码库 > 75% (通过 /repos/{owner}/{repo}/languages API 验证)
-✅ 至少包含 50 个 merged PRs (原: 10)
-✅ 最少 500 个 stars (原: 100，减少噪音)
-✅ 必须有标准化的依赖管理文件 (新增)
-✅ 必须有 CI/CD 配置文件 (新增)
-✅ 最后一次 push 在最近 3 年内 (新增)
-✅ 非 archived 仓库 (新增)
-✅ 非 fork 仓库 (新增)
-✅ 排除 awesome-*, tutorials, examples, demo, dotfiles 等仓库 (新增)
+The thresholds below are the *default* values. They are read at import time from
+SWEGEN_PR_* environment variables (see the "Environment" section), so the
+SWE-Lego-Live outer block can drive them from config.yaml without editing this
+file. Per-language entries in LANGUAGE_OVERRIDES (further down) take precedence
+over both the defaults and the SWEGEN_PR_* env vars for the languages they cover.
 
-PR 筛选条件 (优化后)
-✅ Issue 已关闭 (resolved)
-✅ PR 已合并到主分支
-✅ PR 只链接一个 Issue
-✅ Issue 描述长度 > 50 字符 (原: 10)
-✅ PR 描述长度 > 20 字符 (新增)
-✅ PR 包含测试文件修改 且 包含非测试代码修改
-✅ 修改文件数 1-10 个 (原: 1-15)
-✅ 代码行数变更 < 500 行 (新增)
-✅ 排除依赖更新类 PR: bump, upgrade, renovate, dependabot 等 (新增)
-✅ 排除非功能性 PR: docs:, chore:, style: 等 (新增)
-✅ 排除 revert/merge commits (新增)
+Repository filters (defaults):
+- target language > 40% of the codebase (via /repos/{owner}/{repo}/languages)
+- >= 5 merged PRs
+- >= 30 stars
+- last push within ~3 years; non-archived; non-fork
+- excludes awesome-*, tutorials, examples, demo, dotfiles, etc.
 
+PR filters (defaults):
+- linked issue resolved (closed); PR merged to the main branch
+- PR links exactly one issue
+- PR modifies both test files and non-test code
+- 1-25 files changed; <= 1500 lines (additions + deletions) changed
+- excludes dependency-bump PRs (bump, upgrade, renovate, dependabot, ...)
+- excludes non-functional PRs (docs:, chore:, style:, ...) and revert/merge commits
 
-添加 Multi-SWE 格式字段：
-org, repo, number, state, title, body, base, resolved_issues, fix_patch, test_patch, instance_id
-添加测试相关字段（初始为空字典）：
-fixed_tests, p2p_tests, f2p_tests, s2p_tests, n2p_tests, run_result, test_patch_result, fix_patch_result
-保留所有额外字段：
-base_commit, language, pr_url, issue_url, merged_at, files_changed, merge_commit, problem_statement, PR_id, ISSUE_id, repo, pr_title, issue_title, pr_body, pr_base, pr_state, patch 等
+Emits Multi-SWE-format records: org, repo, number, state, title, body, base,
+resolved_issues, fix_patch, test_patch, instance_id, plus test-related fields
+(fixed_tests, p2p_tests, f2p_tests, s2p_tests, n2p_tests, run_result,
+test_patch_result, fix_patch_result) and provenance fields (base_commit,
+language, pr_url, issue_url, merged_at, files_changed, merge_commit,
+problem_statement, PR_id, ISSUE_id, ...).
 
-PS： 
-1. base_commit:  PR 创建时目标分支的 commit -->  PR 合并前的 commit。因爲对于长期运行的 PR，这两个 commit 可能差很远。原代码 pr['base']['sha'] 获取的是 PR 创建时目标分支的 commit，而不是 PR 合并前的 commit。对于长期运行的 PR，这两个 commit 可能差很远。
+Note: base_commit is the commit of the target branch *just before merge*, not the
+target-branch commit at PR-creation time — these can diverge for long-lived PRs.
 
 Usage:
 
-    # Put GitHub tokens in /home/ywxzml3j/ywxzml3juser23/SWE-gen/gh_token.txt
-
-    # 运行收集 (worker数量自动根据有效token数量确定)
-
-    GITHUB_REQUIRE_PROXY_ISOLATION=0 python tools/collect_prs_wo_image.py \
-        --repo_num 2000 \
-        --max_prs_per_repo 50 \
-        --output_dir ./collected_prs 
-
-    python tools/collect_prs_wo_image.py  --repo_num 500  --max_prs_per_repo 50 --output_dir ./collected_prs 
-
-        # | tee logs/collected_prs.log
-        --force-recheck-all \
-
-    # 只处理特定语言
-    # 进程1：处理Python
+    # Collect a few languages into ./collected_prs
     python tools/collect_prs_wo_image.py \
-        --languages python \
+        --languages python javascript \
         --repo_num 500 \
         --max_prs_per_repo 50 \
-        --output_dir ./collected_prs | tee -a logs/python_collect.log &
-
-    # 进程2：处理JavaScript
-    python tools/collect_prs_wo_image.py \
-        --languages javascript \
-        --repo_num 500 \
-        --max_prs_per_repo 50 \
-        --output_dir ./collected_prs | tee -a logs/js_collect.log &
-
-wait
+        --output_dir ./collected_prs
 
 Environment:
-    GitHub tokens are loaded only from /home/ywxzml3j/ywxzml3juser23/SWE-gen/gh_token.txt.
-                   GITHUB_TOKEN/GITHUB_TOKENS are intentionally ignored by this collector.
-                   Tokens are validated at startup; invalid tokens are filtered out.
-                   Number of parallel workers = number of valid tokens.
+    GITHUB_TOKENS / GITHUB_TOKEN: comma- or whitespace-separated GitHub tokens.
+                   Tokens are ALSO read from a token file (default: <repo>/gh_token.txt,
+                   override with COLLECT_GITHUB_TOKEN_FILE). Env-var tokens and
+                   file tokens are combined. Tokens are validated at startup;
+                   invalid ones are filtered out. Parallel workers = valid tokens.
+    SWEGEN_PR_*:   Override the default filter thresholds above, e.g.
+                   SWEGEN_PR_MIN_STARS, SWEGEN_PR_MIN_MERGED_PRS,
+                   SWEGEN_PR_MAX_LINES_CHANGED. LANGUAGE_OVERRIDES still win where set.
     GITHUB_TOKEN_PROXIES: Optional comma-separated token/proxy mappings:
                    "token1=http://user:pass@ip1:port,token2=socks5://user:pass@ip2:port"
     GITHUB_REQUIRE_PROXY_ISOLATION: Defaults to 1. When multiple tokens are used,
@@ -847,7 +823,6 @@ def check_token_rate_limits(
                 'reset': 0,
                 'core': {}
             }
-    # import pdb;pdb.set_trace()    
     return rate_limit_info
 
 
@@ -2675,14 +2650,16 @@ def main():
         print(f"Loaded {len(env_tokens)} tokens from GITHUB_TOKENS/GITHUB_TOKEN env")
 
     # From explicit proxy mapping sources. These override inline mappings.
+    # Files are resolved relative to the repo root (override with
+    # COLLECT_TOKEN_PROXY_FILES, a ':'-separated path list).
     token_proxy_map.update(load_token_proxy_mapping_from_env())
-    proxy_files = [
-        '/home/ywxzml3j/ywxzml3juser23/SWE-gen/github_token_proxies.txt',
-        '/home/ywxzml3j/ywxzml3juser23/SWE-gen/gh_token_proxies.txt',
-        '/home/ywxzml3j/ywxzml3juser23/SWE-gen/token_proxies.txt',
-        '/home/ywxzml3j/ywxzml3juser23/harbor/github_token_proxies.txt',
-        '/home/ywxzml3j/ywxzml3juser23/harbor/gh_token_proxies.txt',
+    _default_proxy_files = [
+        str(PROJECT_ROOT / 'github_token_proxies.txt'),
+        str(PROJECT_ROOT / 'gh_token_proxies.txt'),
+        str(PROJECT_ROOT / 'token_proxies.txt'),
     ]
+    _proxy_files_env = os.environ.get('COLLECT_TOKEN_PROXY_FILES', '')
+    proxy_files = _proxy_files_env.split(':') if _proxy_files_env else _default_proxy_files
     token_proxy_map.update(load_token_proxy_mapping_from_files(proxy_files))
 
     # Deduplicate while preserving order
