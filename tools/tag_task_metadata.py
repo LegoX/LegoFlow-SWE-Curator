@@ -451,10 +451,10 @@ def tag_dataset(dataset_id: str, datasets_dir: Path, config: TaggerConfig, jobs:
     output_jsonl = dataset_dir / "tags.jsonl"
 
     if not tasks_jsonl.exists():
-        print(f"ERROR: {tasks_jsonl} 不存在，跳过")
+        print(f"ERROR: {tasks_jsonl} does not exist, skipping")
         return []
 
-    print(f"\n{'='*80}\n打标数据集: {dataset_id}\n输入: {tasks_jsonl}\n输出: {output_jsonl}\n并发: {jobs}\n{'='*80}")
+    print(f"\n{'='*80}\nTagging dataset: {dataset_id}\ninput: {tasks_jsonl}\noutput: {output_jsonl}\nconcurrency: {jobs}\n{'='*80}")
 
     tagged_ids: set[str] = set()
     if output_jsonl.exists():
@@ -464,7 +464,7 @@ def tag_dataset(dataset_id: str, datasets_dir: Path, config: TaggerConfig, jobs:
                     tagged_ids.add(json.loads(line)["instance_id"])
                 except Exception:
                     pass
-        print(f"已打标(跳过): {len(tagged_ids)}")
+        print(f"already tagged (skipped): {len(tagged_ids)}")
 
     records: list[dict[str, Any]] = []
     with tasks_jsonl.open("r", encoding="utf-8") as f:
@@ -478,9 +478,9 @@ def tag_dataset(dataset_id: str, datasets_dir: Path, config: TaggerConfig, jobs:
                     break
 
     if not records:
-        print("无需打标，跳过")
+        print("nothing to tag, skipping")
         return []
-    print(f"待打标: {len(records)}")
+    print(f"to tag: {len(records)}")
 
     completed = 0
     failed: list[str] = []
@@ -498,29 +498,29 @@ def tag_dataset(dataset_id: str, datasets_dir: Path, config: TaggerConfig, jobs:
                         out.flush()
                     completed += 1
                     if completed % 200 == 0:
-                        print(f"  进度: {completed}/{len(records)} ({completed/len(records)*100:.1f}%)")
+                        print(f"  progress: {completed}/{len(records)} ({completed/len(records)*100:.1f}%)")
                 except Exception as exc:
                     failed.append(rec["instance_id"])
                     if len(failed) <= 5:
                         print(f"  ERROR {rec['instance_id']}: {exc}")
 
-    print(f"✓ {dataset_id}: 成功 {completed}, 失败 {len(failed)}")
+    print(f"✓ {dataset_id}: succeeded {completed}, failed {len(failed)}")
     return failed
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="harbor-style difficulty + 4-tag 打标 (JSONL 数据集)")
+    parser = argparse.ArgumentParser(description="harbor-style difficulty + 4-tag tagging (JSONL datasets)")
     parser.add_argument("--dataset", choices=[*DATASET_IDS, "all"], default="all")
     parser.add_argument("--model", default=os.environ.get("TAGGING_MODEL", "Qwen3.6-35B-A3B"))
     parser.add_argument("--api-key", default=os.environ.get("TAGGING_API_KEY", "dummy-cf"))
     parser.add_argument("--base-url", default=os.environ.get("TAGGING_API_BASE_URL", "http://llm.jierungogogo.com/v1"))
     parser.add_argument("--jobs", type=int, default=64)
     parser.add_argument("--retries", type=int, default=3)
-    parser.add_argument("--max-count", type=int, default=None, help="每数据集上限(测试用)")
+    parser.add_argument("--max-count", type=int, default=None, help="per-dataset cap (for testing)")
     parser.add_argument(
         "--datasets-dir",
         default=None,
-        help="数据集根目录 (默认: $TAGGING_DATASETS_DIR 或 ./datasets)",
+        help="datasets root dir (default: $TAGGING_DATASETS_DIR or ./datasets)",
     )
     args = parser.parse_args(argv)
 
@@ -539,16 +539,16 @@ def main(argv: list[str] | None = None) -> int:
         if failed:
             all_failed[dataset_id] = failed
 
-    # 自动重跑失败 case（低并发更稳）
+    # Auto-retry failed cases (lower concurrency is more stable)
     if all_failed:
-        print(f"\n{'='*80}\n重跑失败 case (jobs=8)\n{'='*80}")
+        print(f"\n{'='*80}\nretrying failed cases (jobs=8)\n{'='*80}")
         retry_config = TaggerConfig(
             model=args.model, api_key=args.api_key, base_url=args.base_url, retries=5, retry_delay_sec=2.0
         )
         for dataset_id in list(all_failed):
             tag_dataset(dataset_id, datasets_dir, retry_config, 8, None)
 
-    print("\n" + "=" * 80 + "\n全部打标完成\n" + "=" * 80)
+    print("\n" + "=" * 80 + "\nall tagging complete\n" + "=" * 80)
     return 0
 
 

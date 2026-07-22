@@ -739,7 +739,7 @@ def create_cmd(
             "insufficient_quota",
             "remainquota",
             "quota exceeded",
-            "额度已用尽",
+            "额度已用尽",  # upstream provider's zh error text for "quota exhausted"; kept verbatim to match it
             "authenticationerror",
             "invalid api key",
             "incorrect api key",

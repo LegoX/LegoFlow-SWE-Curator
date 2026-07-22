@@ -183,20 +183,20 @@ def format_recovery_time(seconds: float) -> str:
         seconds: Time in seconds until recovery
         
     Returns:
-        Formatted string like "X 秒", "X 分钟", or "X 小时 Y 分钟"
+        Formatted string like "X sec", "X min", or "X h Y min"
     """
     if seconds < 60:
-        return f"{int(seconds)} 秒"
+        return f"{int(seconds)} sec"
     elif seconds < 3600:
         minutes = int(seconds / 60)
-        return f"{minutes} 分钟"
+        return f"{minutes} min"
     else:
         hours = int(seconds / 3600)
         remaining_minutes = int((seconds % 3600) / 60)
         if remaining_minutes > 0:
-            return f"{hours} 小时 {remaining_minutes} 分钟"
+            return f"{hours} h {remaining_minutes} min"
         else:
-            return f"{hours} 小时"
+            return f"{hours} h"
 
 
 def mask_token(token: str) -> str:
@@ -726,7 +726,7 @@ def validate_github_tokens(
                         if reset_time > 0:
                             recovery_seconds = max(0, reset_time - current_time)
                             recovery_str = format_recovery_time(recovery_seconds)
-                            print(f"  ⚠ Token rate limited but valid: {mask_token(token)} (恢复时间: {recovery_str})")
+                            print(f"  ⚠ Token rate limited but valid: {mask_token(token)} (recovery time: {recovery_str})")
                         else:
                             print(f"  ⚠ Token rate limited but valid: {mask_token(token)}")
                     elif 'suspended' in response.text.lower():
@@ -1247,9 +1247,9 @@ class GitHubClient:
                     for token_mask, recovery_seconds in rate_limited_info:
                         if recovery_seconds >= 0:
                             recovery_str = format_recovery_time(recovery_seconds)
-                            log(f"  - {token_mask}: 恢复时间 {recovery_str}")
+                            log(f"  - {token_mask}: recovery time {recovery_str}")
                         else:
-                            log(f"  - {token_mask}: 恢复时间未知")
+                            log(f"  - {token_mask}: recovery time unknown")
                 elif wait_time > 1:
                     log(f"All tokens exhausted. Waiting {wait_time:.0f} seconds...")
                 time.sleep(wait_time)
@@ -1336,9 +1336,9 @@ class GitHubClient:
                     for token_mask, recovery_seconds in rate_limited_info:
                         if recovery_seconds >= 0:
                             recovery_str = format_recovery_time(recovery_seconds)
-                            log(f"  - {token_mask}: 恢复时间 {recovery_str}")
+                            log(f"  - {token_mask}: recovery time {recovery_str}")
                         else:
-                            log(f"  - {token_mask}: 恢复时间未知")
+                            log(f"  - {token_mask}: recovery time unknown")
                 elif wait_time > 1:
                     log(f"All tokens busy (diff request). Waiting {wait_time:.0f} seconds...")
                 # Wait for rate limit reset
