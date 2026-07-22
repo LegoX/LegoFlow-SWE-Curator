@@ -42,7 +42,7 @@ from typing import Any, TypeVar
 
 import requests
 
-DATASET_IDS = ["self_made", "swe_rebench", "openswe_filtered", "scale_swe"]
+DATASET_IDS = ["self_made", "swe_rebench", "swe_rebench_v2", "openswe_filtered", "scale_swe"]
 
 
 def resolve_datasets_dir(cli_value: str | None) -> Path:
