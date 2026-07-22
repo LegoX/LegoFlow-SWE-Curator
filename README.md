@@ -51,7 +51,7 @@ dashboard), read the outer block's `CLAUDE.md`.
 src/swegen/             # Python package (CLI: `swegen`, `harbor`)
 tools/
   collect_prs_wo_image.py   # PR-list collector
-  score_tasks.py            # static difficulty scoring
+  tag_task_metadata.py      # canonical difficulty + 4-tag metadata tagging (JSONL datasets)
 tests/                  # pytest suite
 artifacts/              # tiny sample fixtures used by quick-verify
 pyproject.toml          # editable install: `pip install -e .`

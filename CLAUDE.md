@@ -20,7 +20,7 @@ script + supporting tools). It is consumed as a git submodule from the
 src/swegen/             # Python package — `swegen` CLI, task generation, validation, scoring
 tools/                  # Standalone scripts referenced by the outer block:
   collect_prs_wo_image.py    # collect PR ID lists from GitHub
-  score_tasks.py             # static difficulty scoring
+  tag_task_metadata.py       # canonical difficulty + 4-tag metadata tagging (JSONL datasets)
 tests/                  # self-contained pytest suite for the package
 artifacts/              # tiny sample fixtures used by quick-verify (e.g. tox-3813)
 pyproject.toml          # editable install via `pip install -e repos/swegen/`
