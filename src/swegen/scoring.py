@@ -1,118 +1,207 @@
 """Difficulty scoring for SWE-gen tasks.
 
-Scores tasks on a 1-10 scale using 5 static dimensions extracted from
-fix.patch, tests/, and instruction.md. Zero API calls required.
+This module is the single source of truth for difficulty scoring. Both callers
+share the exact same algorithm, weights, and thresholds:
 
-Dimensions (weighted):
-  1. patch_scope (30%): files modified + lines changed
-  2. logic_complexity (25%): new functions/classes/methods in patch
-  3. test_complexity (20%): test file count + test lines
-  4. context_breadth (15%): directory spread of changes
-  5. instruction_complexity (10%): instruction length
+  * `swegen create` (via `score_task`, reading a task directory on disk), and
+  * the dataset tagger `tools/tag_task_metadata.py` (via `score_from_text`,
+    operating on patch/test diff text).
 
-Score mapping: 1-3 = easy, 4-7 = medium, 8-10 = hard
+Methodology (weighted, log-scaled; no API calls):
+  Five dimensions are each scaled to 1.0-5.0, combined by weight, then mapped to
+  a final 1.0-10.0 score.
+
+  | dimension              | weight | signal                                  |
+  | ---------------------- | ------ | --------------------------------------- |
+  | patch_scope            | 0.30   | changed lines + files + hunks           |
+  | logic_complexity       | 0.25   | new defs/classes + control-flow adds    |
+  | context_breadth        | 0.20   | distinct directories touched            |
+  | test_complexity        | 0.15   | test lines + test files                 |
+  | instruction_complexity | 0.10   | instruction length                      |
+
+Score buckets: easy <= 4.0, medium <= 7.0, hard > 7.0.
 """
 
 from __future__ import annotations
 
-import json
+import math
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 
-class DimensionScore(BaseModel):
-    name: str
-    raw: float = 0.0
-    score: int = 1  # 1-5
-    detail: str = ""
-
-
 class TaskScore(BaseModel):
     task_id: str
-    score: float = 0.0  # 1-10
+    score: float = 0.0  # 1.0-10.0
     label: str = "medium"  # easy/medium/hard
-    dimensions: list[DimensionScore] = Field(default_factory=list)
+    dim_scores: dict[str, float] = Field(default_factory=dict)
     patch_files: int = 0
     patch_lines: int = 0
+    patch_hunks: int = 0
     test_files: int = 0
     test_lines: int = 0
     instruction_chars: int = 0
     directories: int = 0
 
 
-# Weights for each dimension
+# Dimension weights (canonical calibration, shared by all callers).
 WEIGHTS = {
     "patch_scope": 0.30,
     "logic_complexity": 0.25,
-    "test_complexity": 0.20,
-    "context_breadth": 0.15,
+    "context_breadth": 0.20,
+    "test_complexity": 0.15,
     "instruction_complexity": 0.10,
 }
 
-# Patterns for detecting new function/class/method definitions across languages
-NEW_DEFINITION_PATTERNS = [
-    r"^\+\s*def\s+\w+",                    # Python
-    r"^\+\s*(public|private|protected)?\s*(static\s+)?\w+\s+\w+\s*\(",  # Java/C/C++
-    r"^\+\s*func\s+\w+",                   # Go
-    r"^\+\s*(pub\s+)?fn\s+\w+",            # Rust
-    r"^\+\s*(export\s+)?(async\s+)?function\s+\w+",  # JS/TS
-    r"^\+\s*(export\s+)?class\s+\w+",      # Python/JS/TS/Java
-    r"^\+\s*struct\s+\w+",                 # Rust/Go/C
-    r"^\+\s*impl\s+",                      # Rust
-    r"^\+\s*interface\s+\w+",              # Go/Java/TS
-    r"^\+\s*(const|let|var)\s+\w+\s*=\s*(async\s+)?\(",  # JS/TS arrow functions
-]
+
+# ---------------------------------------------------------------------------
+# Core scoring (single implementation used by every caller)
+# ---------------------------------------------------------------------------
+
+def _scale(raw: float, *, easy: float, hard: float) -> float:
+    """Log-scale a raw dimension signal into the 1.0-5.0 range."""
+    if raw <= easy:
+        return 1.0
+    if raw >= hard:
+        return 5.0
+    ratio = math.log1p(raw - easy) / math.log1p(hard - easy)
+    return round(1.0 + ratio * 4.0, 2)
 
 
-def _parse_patch(patch_path: Path) -> dict:
-    """Parse a unified diff patch file for metrics."""
-    if not patch_path.exists():
-        return {"files": 0, "additions": 0, "deletions": 0, "dirs": set(), "new_defs": 0}
+def score_from_metrics(
+    *,
+    patch_lines: int,
+    patch_files: int,
+    patch_hunks: int,
+    new_defs: int,
+    control_flow: int,
+    directories: int,
+    test_lines: int,
+    test_files: int,
+    instr_chars: int,
+) -> dict[str, Any]:
+    """Compute difficulty score/label from already-extracted metrics.
 
-    text = patch_path.read_text(errors="replace")
-    files = set()
-    dirs = set()
+    This is the one place the scoring formula, weights, and label thresholds
+    live. Text- and disk-based entry points both funnel their metrics here.
+    """
+    dim_scores = {
+        "patch_scope": _scale(
+            patch_lines + patch_files * 8 + patch_hunks * 3, easy=20, hard=260
+        ),
+        "logic_complexity": _scale(
+            new_defs * 10 + control_flow * 4 + patch_lines, easy=20, hard=220
+        ),
+        "context_breadth": _scale(
+            directories * 15 + patch_files * 4 + patch_hunks, easy=15, hard=120
+        ),
+        "test_complexity": _scale(test_lines + test_files * 10, easy=35, hard=350),
+        "instruction_complexity": _scale(instr_chars, easy=1500, hard=12000),
+    }
+    weighted_sum = sum(dim_scores[name] * WEIGHTS[name] for name in WEIGHTS)
+    final_score = round(1.0 + (weighted_sum - 1.0) * 2.05, 1)
+    final_score = max(1.0, min(10.0, final_score))
+    if final_score <= 4.0:
+        label = "easy"
+    elif final_score <= 7.0:
+        label = "medium"
+    else:
+        label = "hard"
+    return {
+        "difficulty_score": final_score,
+        "difficulty_label": label,
+        "dim_scores": dim_scores,
+        "patch_stats": {"lines": patch_lines, "hunks": patch_hunks, "files": patch_files},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Diff text parsing (used by both entry points)
+# ---------------------------------------------------------------------------
+
+_CONTROL_FLOW_RE = re.compile(
+    r"\b(if|elif|else|for|while|try|except|with|match|case|switch|catch)\b"
+)
+_NEW_DEF_RE = re.compile(r"^\+\s*(def|async\s+def|class|function|const|let|var)\b")
+
+
+def parse_patch_text(patch_text: str) -> dict[str, Any]:
+    """Parse a unified diff into the metrics the scorer consumes."""
+    files = 0
+    hunks = 0
     additions = 0
     deletions = 0
+    dirs: set[str] = set()
     new_defs = 0
+    control_flow = 0
 
-    for line in text.splitlines():
-        if line.startswith("diff --git"):
-            # Extract file path: diff --git a/path b/path
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git "):
+            files += 1
             parts = line.split()
             if len(parts) >= 4:
-                fpath = parts[3].lstrip("b/")
-                files.add(fpath)
-                parent = str(Path(fpath).parent)
-                if parent != ".":
+                current_file = parts[3].removeprefix("b/")
+                parent = str(Path(current_file).parent)
+                if parent and parent != ".":
                     dirs.add(parent)
-        elif line.startswith("+") and not line.startswith("+++"):
+            continue
+        if line.startswith("@@"):
+            hunks += 1
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+"):
             additions += 1
-            for pattern in NEW_DEFINITION_PATTERNS:
-                if re.match(pattern, line):
-                    new_defs += 1
-                    break
-        elif line.startswith("-") and not line.startswith("---"):
+            if _NEW_DEF_RE.search(line):
+                new_defs += 1
+            if _CONTROL_FLOW_RE.search(line):
+                control_flow += 1
+        elif line.startswith("-"):
             deletions += 1
 
     return {
-        "files": len(files),
+        "files": files,
+        "hunks": hunks,
         "additions": additions,
         "deletions": deletions,
         "dirs": dirs,
         "new_defs": new_defs,
+        "control_flow": control_flow,
     }
 
 
+# ---------------------------------------------------------------------------
+# Text entry point (used by tools/tag_task_metadata.py over JSONL datasets)
+# ---------------------------------------------------------------------------
+
+def score_from_text(patch_text: str, test_text: str, instruction: str) -> dict[str, Any]:
+    """Score difficulty from patch, test-patch, and instruction text."""
+    p = parse_patch_text(patch_text)
+    t = parse_patch_text(test_text) if test_text else {"additions": 0, "deletions": 0, "files": 0}
+    return score_from_metrics(
+        patch_lines=p["additions"] + p["deletions"],
+        patch_files=p["files"],
+        patch_hunks=p["hunks"],
+        new_defs=p["new_defs"],
+        control_flow=p["control_flow"],
+        directories=len(p["dirs"]),
+        test_lines=t["additions"] + t["deletions"],
+        test_files=t["files"],
+        instr_chars=len(instruction),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Disk entry point (used by `swegen create` over task directories)
+# ---------------------------------------------------------------------------
+
 def _count_test_files(task_dir: Path) -> tuple[int, int]:
-    """Count test files and total test lines in tests/ directory."""
+    """Count test files and total test lines in a task's tests/ directory."""
     tests_dir = task_dir / "tests"
     if not tests_dir.exists():
         return 0, 0
-
     test_files = 0
     test_lines = 0
     for f in tests_dir.rglob("*"):
@@ -125,119 +214,21 @@ def _count_test_files(task_dir: Path) -> tuple[int, int]:
     return test_files, test_lines
 
 
-def _score_patch_scope(n_files: int, n_lines: int) -> DimensionScore:
-    """Score based on number of files and lines changed."""
-    total_lines = n_lines
-    if n_files <= 1 and total_lines < 10:
-        s = 1
-    elif n_files <= 1 and total_lines < 30:
-        s = 2
-    elif n_files <= 3 and total_lines < 50:
-        s = 3
-    elif n_files <= 5 and total_lines < 100:
-        s = 4
-    else:
-        s = 5
-    return DimensionScore(
-        name="patch_scope", score=s,
-        detail=f"{n_files} files, {total_lines} lines",
-    )
-
-
-def _score_logic_complexity(new_defs: int, additions: int, deletions: int) -> DimensionScore:
-    """Score based on new definitions and change ratio."""
-    # More additions than deletions suggests new logic, not just cleanup
-    net_additions = max(0, additions - deletions)
-    if new_defs == 0 and net_additions < 5:
-        s = 1
-    elif new_defs == 0 and net_additions < 15:
-        s = 2
-    elif new_defs <= 2:
-        s = 3
-    elif new_defs <= 5:
-        s = 4
-    else:
-        s = 5
-    return DimensionScore(
-        name="logic_complexity", score=s,
-        detail=f"{new_defs} new defs, +{additions}/-{deletions}",
-    )
-
-
-def _score_test_complexity(n_test_files: int, n_test_lines: int) -> DimensionScore:
-    """Score based on test file count and lines."""
-    if n_test_files <= 1 and n_test_lines < 20:
-        s = 1
-    elif n_test_files <= 1 and n_test_lines < 60:
-        s = 2
-    elif n_test_files <= 3 and n_test_lines < 100:
-        s = 3
-    elif n_test_files <= 3:
-        s = 4
-    else:
-        s = 5
-    return DimensionScore(
-        name="test_complexity", score=s,
-        detail=f"{n_test_files} test files, {n_test_lines} lines",
-    )
-
-
-def _score_context_breadth(n_dirs: int) -> DimensionScore:
-    """Score based on directory spread of changes."""
-    if n_dirs <= 1:
-        s = 1
-    elif n_dirs == 2:
-        s = 2
-    elif n_dirs == 3:
-        s = 3
-    elif n_dirs <= 5:
-        s = 4
-    else:
-        s = 5
-    return DimensionScore(
-        name="context_breadth", score=s,
-        detail=f"{n_dirs} directories",
-    )
-
-
-def _score_instruction_complexity(n_chars: int) -> DimensionScore:
-    """Score based on instruction length."""
-    if n_chars < 150:
-        s = 1
-    elif n_chars < 300:
-        s = 2
-    elif n_chars < 500:
-        s = 3
-    elif n_chars < 800:
-        s = 4
-    else:
-        s = 5
-    return DimensionScore(
-        name="instruction_complexity", score=s,
-        detail=f"{n_chars} chars",
-    )
-
-
 def score_task(task_dir: Path, task_id: Optional[str] = None) -> TaskScore:
     """Score a single task directory.
 
-    Args:
-        task_dir: Path to task directory containing solution/fix.patch, tests/, instruction.md
-        task_id: Optional task ID (defaults to directory name)
-
-    Returns:
-        TaskScore with 1-10 score and easy/medium/hard label
+    Reads solution/fix.patch, tests/, and instruction.md, then feeds the
+    extracted metrics through the shared `score_from_metrics` scorer so the
+    result matches the dataset tagger exactly.
     """
     tid = task_id or task_dir.name
 
-    # Parse patch
     patch_path = task_dir / "solution" / "fix.patch"
-    patch_info = _parse_patch(patch_path)
+    patch_text = patch_path.read_text(errors="replace") if patch_path.exists() else ""
+    p = parse_patch_text(patch_text)
 
-    # Count tests
     test_files, test_lines = _count_test_files(task_dir)
 
-    # Read instruction
     instr_path = task_dir / "instruction.md"
     instr_chars = 0
     if instr_path.exists():
@@ -246,41 +237,31 @@ def score_task(task_dir: Path, task_id: Optional[str] = None) -> TaskScore:
         except Exception:
             pass
 
-    # Score each dimension
-    dims = [
-        _score_patch_scope(patch_info["files"], patch_info["additions"] + patch_info["deletions"]),
-        _score_logic_complexity(patch_info["new_defs"], patch_info["additions"], patch_info["deletions"]),
-        _score_test_complexity(test_files, test_lines),
-        _score_context_breadth(len(patch_info["dirs"])),
-        _score_instruction_complexity(instr_chars),
-    ]
-
-    # Weighted sum: raw 1-5 → mapped to 1-10
-    weight_keys = list(WEIGHTS.keys())
-    weighted_sum = sum(dims[i].score * WEIGHTS[weight_keys[i]] for i in range(len(dims)))
-    # weighted_sum is 1.0-5.0, map to 1-10
-    final_score = round((weighted_sum - 1.0) * (9.0 / 4.0) + 1.0, 1)
-    final_score = max(1.0, min(10.0, final_score))
-
-    # Label
-    if final_score <= 3.0:
-        label = "easy"
-    elif final_score <= 7.0:
-        label = "medium"
-    else:
-        label = "hard"
+    patch_lines = p["additions"] + p["deletions"]
+    result = score_from_metrics(
+        patch_lines=patch_lines,
+        patch_files=p["files"],
+        patch_hunks=p["hunks"],
+        new_defs=p["new_defs"],
+        control_flow=p["control_flow"],
+        directories=len(p["dirs"]),
+        test_lines=test_lines,
+        test_files=test_files,
+        instr_chars=instr_chars,
+    )
 
     return TaskScore(
         task_id=tid,
-        score=final_score,
-        label=label,
-        dimensions=dims,
-        patch_files=patch_info["files"],
-        patch_lines=patch_info["additions"] + patch_info["deletions"],
+        score=result["difficulty_score"],
+        label=result["difficulty_label"],
+        dim_scores=result["dim_scores"],
+        patch_files=p["files"],
+        patch_lines=patch_lines,
+        patch_hunks=p["hunks"],
         test_files=test_files,
         test_lines=test_lines,
         instruction_chars=instr_chars,
-        directories=len(patch_info["dirs"]),
+        directories=len(p["dirs"]),
     )
 
 
@@ -288,15 +269,7 @@ def score_tasks_batch(
     task_dirs: list[Path],
     task_ids: Optional[list[str]] = None,
 ) -> list[TaskScore]:
-    """Score multiple tasks.
-
-    Args:
-        task_dirs: List of task directory paths
-        task_ids: Optional list of task IDs (defaults to dir names)
-
-    Returns:
-        List of TaskScore objects
-    """
+    """Score multiple task directories."""
     results = []
     for i, td in enumerate(task_dirs):
         tid = task_ids[i] if task_ids and i < len(task_ids) else None
@@ -318,22 +291,19 @@ def update_task_toml_difficulty(task_dir: Path, score: TaskScore) -> None:
 
     content = toml_path.read_text()
 
-    # Update difficulty field
-    import re as _re
-    content = _re.sub(
+    content = re.sub(
         r'difficulty\s*=\s*"[^"]*"',
         f'difficulty = "{score.label}"',
         content,
     )
 
-    # Add or update scoring section
     scoring_section = f"\n[scoring]\ndifficulty_score = {score.score}\ndifficulty_label = \"{score.label}\"\n"
     if "[scoring]" in content:
-        content = _re.sub(
+        content = re.sub(
             r'\[scoring\].*?(?=\n\[|\Z)',
             scoring_section.strip() + "\n",
             content,
-            flags=_re.DOTALL,
+            flags=re.DOTALL,
         )
     else:
         content = content.rstrip() + "\n" + scoring_section

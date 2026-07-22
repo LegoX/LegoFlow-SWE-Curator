@@ -5,12 +5,10 @@ This is the single, canonical tagging tool for SWE-gen. It scores difficulty
 (static, no API) and generates the 4-tag metadata (LLM) in one pass, operating
 over unified JSONL datasets (`<datasets-dir>/<id>/tasks.jsonl`).
 
-Ported from harbor `scripts/task_analysis/tag_task_metadata.py`.
-
-Methodology (identical to harbor):
-  * Difficulty: 5-dimension weighted, log-scaled model
-      patch_scope / logic_complexity / context_breadth /
-      test_complexity / instruction_complexity  ->  1.0-10.0, easy/medium/hard
+Methodology:
+  * Difficulty: the 5-dimension weighted, log-scaled model defined in
+      `swegen.scoring` (`score_from_text`) — the same scorer `swegen create`
+      uses, so difficulty is identical across the pipeline and the databoard.
   * Tags: exactly 4 in order [language, area, topic, bug_class] via an LLM,
       where area ∈ {backend, frontend, fullstack, cli, library, framework}.
 
@@ -29,9 +27,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
+import sys
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +39,12 @@ from threading import Lock
 from typing import Any, TypeVar
 
 import requests
+
+# Difficulty scoring is defined once in the swegen package and shared with
+# `swegen create`. Prefer the co-located package so this tool always uses the
+# same scorer it ships with, regardless of any other installed swegen.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from swegen.scoring import score_from_text
 
 DATASET_IDS = ["self_made", "swe_rebench", "swe_rebench_v2", "openswe_filtered", "scale_swe"]
 
@@ -62,14 +66,6 @@ MAX_PATCH_CHARS = 12000
 MAX_TEST_CHARS = 8000
 TAG_COMPLETION_TOKENS = 1024
 T = TypeVar("T")
-
-WEIGHTS = {
-    "patch_scope": 0.30,
-    "logic_complexity": 0.25,
-    "context_breadth": 0.20,
-    "test_complexity": 0.15,
-    "instruction_complexity": 0.10,
-}
 
 TAG_SYSTEM_PROMPT = """You generate SWE task tags.
 
@@ -102,111 +98,6 @@ class TaggerConfig:
     timeout_sec: float = 120.0
     retries: int = 3
     retry_delay_sec: float = 2.0
-
-
-# ---------------------------------------------------------------------------
-# Difficulty scoring (ported verbatim from harbor, operating on patch/test text)
-# ---------------------------------------------------------------------------
-
-def _parse_patch_text(patch_text: str) -> dict[str, Any]:
-    files = 0
-    hunks = 0
-    additions = 0
-    deletions = 0
-    dirs: set[str] = set()
-    new_defs = 0
-    control_flow = 0
-    control_flow_re = re.compile(
-        r"\b(if|elif|else|for|while|try|except|with|match|case|switch|catch)\b"
-    )
-    new_def_re = re.compile(r"^\+\s*(def|async\s+def|class|function|const|let|var)\b")
-
-    for line in patch_text.splitlines():
-        if line.startswith("diff --git "):
-            files += 1
-            parts = line.split()
-            if len(parts) >= 4:
-                current_file = parts[3].removeprefix("b/")
-                parent = str(Path(current_file).parent)
-                if parent and parent != ".":
-                    dirs.add(parent)
-            continue
-        if line.startswith("@@"):
-            hunks += 1
-            continue
-        if line.startswith("+++") or line.startswith("---"):
-            continue
-        if line.startswith("+"):
-            additions += 1
-            if new_def_re.search(line):
-                new_defs += 1
-            if control_flow_re.search(line):
-                control_flow += 1
-        elif line.startswith("-"):
-            deletions += 1
-
-    return {
-        "files": files,
-        "hunks": hunks,
-        "additions": additions,
-        "deletions": deletions,
-        "dirs": dirs,
-        "new_defs": new_defs,
-        "control_flow": control_flow,
-    }
-
-
-def _scale(raw: float, *, easy: float, hard: float) -> float:
-    if raw <= easy:
-        return 1.0
-    if raw >= hard:
-        return 5.0
-    ratio = math.log1p(raw - easy) / math.log1p(hard - easy)
-    return round(1.0 + ratio * 4.0, 2)
-
-
-def score_task(patch_text: str, test_text: str, instruction: str) -> dict[str, Any]:
-    """Compute difficulty score/label from patch, test patch, and instruction text."""
-    patch_info = _parse_patch_text(patch_text)
-    test_info = _parse_patch_text(test_text) if test_text else {"additions": 0, "deletions": 0, "files": 0}
-    test_lines = test_info["additions"] + test_info["deletions"]
-    test_files = test_info["files"]
-    instr_chars = len(instruction)
-
-    patch_lines = patch_info["additions"] + patch_info["deletions"]
-    patch_files = patch_info["files"]
-    patch_hunks = patch_info["hunks"]
-    directories = len(patch_info["dirs"])
-
-    dim_scores = {
-        "patch_scope": _scale(
-            patch_lines + patch_files * 8 + patch_hunks * 3, easy=20, hard=260
-        ),
-        "logic_complexity": _scale(
-            patch_info["new_defs"] * 10 + patch_info["control_flow"] * 4 + patch_lines,
-            easy=20,
-            hard=220,
-        ),
-        "context_breadth": _scale(
-            directories * 15 + patch_files * 4 + patch_hunks, easy=15, hard=120
-        ),
-        "test_complexity": _scale(test_lines + test_files * 10, easy=35, hard=350),
-        "instruction_complexity": _scale(instr_chars, easy=1500, hard=12000),
-    }
-    weighted_sum = sum(dim_scores[name] * WEIGHTS[name] for name in WEIGHTS)
-    final_score = round(1.0 + (weighted_sum - 1.0) * 2.05, 1)
-    final_score = max(1.0, min(10.0, final_score))
-    if final_score <= 4.0:
-        label = "easy"
-    elif final_score <= 7.0:
-        label = "medium"
-    else:
-        label = "hard"
-    return {
-        "difficulty_score": final_score,
-        "difficulty_label": label,
-        "patch_stats": {"lines": patch_lines, "hunks": patch_hunks, "files": patch_files},
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +316,7 @@ def generate_tags_for_record(record: dict[str, Any], config: TaggerConfig) -> li
 
 def tag_one_record(record: dict[str, Any], config: TaggerConfig) -> dict[str, Any]:
     """Score difficulty (static) + generate 4 tags (LLM). Raises on failure."""
-    scored = score_task(
+    scored = score_from_text(
         record.get("patch") or "",
         record.get("test_patch") or "",
         record.get("problem_statement") or "",
