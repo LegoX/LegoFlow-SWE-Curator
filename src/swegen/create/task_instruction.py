@@ -23,7 +23,7 @@ MAX_TEST_FILE_LENGTH = 3000  # Max chars per test file
 MAX_TOTAL_TEST_LENGTH = 10000  # Max total chars for all test files
 MIN_INSTRUCTION_LENGTH = 100
 OPENAI_API_TIMEOUT = float(os.getenv("SWEGEN_OPENAI_API_TIMEOUT", "300"))
-MAX_COMPLETION_TOKENS = 4096
+MAX_COMPLETION_TOKENS = 16384
 # Support environment variable for model name (for local model deployment)
 MODEL_NAME = os.getenv("OPENAI_MODEL") or os.getenv("ANTHROPIC_MODEL") or "gpt-5.2"
 DEBUG_REASON_TRUNCATE_LENGTH = 100
