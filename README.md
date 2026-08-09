@@ -1,13 +1,13 @@
-# SWE-gen
+# LegoFlow Curator
 
 Automated pipeline that converts GitHub PRs into verified SWE-Bench tasks across
 8 programming languages: Python, JavaScript, TypeScript, Go, C, C++, Java, Rust.
 
-This repository is the **core SWE-gen Python package**. It is consumed as a
-git submodule from the `SWE-Lego-Live` block tree at
-`subblock/curator/repos/swegen/`. The runtime configuration, launchers, and
-operational contract live in the outer block — see
-`SWE-Lego-Live/subblock/curator/CLAUDE.md`.
+This repository is the **core LegoFlow Curator Python package**. It is consumed
+as a git submodule from the LegoFlow block tree at
+`blocks/curator/repos/legoflow-curator/`. Runtime configuration, launchers, and
+the operational contract live in the outer block at
+`blocks/curator/CLAUDE.md`.
 
 ## Pipeline
 
@@ -23,7 +23,8 @@ operational contract live in the outer block — see
 
 ## CLI commands
 
-The `swegen` CLI exposes four commands (run `swegen <cmd> --help` for flags):
+The `legoflow-curator` CLI exposes four commands (run
+`legoflow-curator <cmd> --help` for flags):
 
 - `create` — convert a list of PR IDs into verified, scored, tagged tasks.
 - `validate` — re-run NOP/Oracle validation on an existing Harbor task.
@@ -47,7 +48,7 @@ python tools/collect_prs_wo_image.py \
 # Generate verified tasks. --timeout is the OVERALL per-case budget and must be
 # >= --cc-timeout (the inner Claude-Code session), or every case is killed early
 # and yields zero tasks. --no-require-issue keeps PRs that don't link an issue.
-swegen create \
+legoflow-curator create \
   --input-ids-file ./artifacts/collected_prs/python_pr_ids.txt \
   --output ./artifacts/swe_tasks/py-cc \
   --n-concurrent 8 \
@@ -62,7 +63,7 @@ dashboard), read the outer block's `CLAUDE.md`.
 ## Project layout
 
 ```
-src/swegen/             # Python package (CLI: `swegen`, `harbor`)
+src/legoflow_curator/             # Python package (CLI: `legoflow-curator`, `harbor`)
 tools/
   collect_prs_wo_image.py   # PR-list collector
   tag_task_metadata.py      # canonical difficulty + 4-tag metadata tagging (JSONL datasets)
@@ -75,7 +76,7 @@ LICENSE
 
 ## task.toml metadata tags
 
-`swegen create` writes `metadata.tags = [language, area, topic, bug_class]`:
+`legoflow-curator create` writes `metadata.tags = [language, area, topic, bug_class]`:
 
 - `language` — primary programming language.
 - `area` — one of `backend`, `frontend`, `fullstack`, `cli`, `library`, `framework`.
@@ -84,8 +85,8 @@ LICENSE
   `missing-fallback`, `incomplete-validation`, `wrong-default`,
   `type-handling-inconsistency`, `missing-metadata-propagation`.
 
-The prompt and Pydantic schema live in `src/swegen/create/task_instruction.py`
-and `src/swegen/create/utils.py`. Tags are produced by the same combined LLM
+The prompt and Pydantic schema live in `src/legoflow_curator/create/task_instruction.py`
+and `src/legoflow_curator/create/utils.py`. Tags are produced by the same combined LLM
 call that evaluates the PR; no extra API call is needed.
 
 ## Tests
@@ -97,3 +98,6 @@ pytest tests/
 ## License
 
 Apache-2.0
+
+The package includes work from earlier Apache-2.0-licensed implementations.
+Copyright and authorship remain available in the Git history.

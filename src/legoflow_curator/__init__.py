@@ -1,4 +1,4 @@
-from swegen.api import (
+from legoflow_curator.api import (
     Classification,
     Subtype,
     TaskVerdict,
@@ -6,7 +6,7 @@ from swegen.api import (
     classify_trial,
     compute_task_verdict,
 )
-from swegen.config import CreateConfig, FarmConfig, ValidateConfig
+from legoflow_curator.config import CreateConfig, FarmConfig, ValidateConfig
 
 __version__ = "0.1.0"
 

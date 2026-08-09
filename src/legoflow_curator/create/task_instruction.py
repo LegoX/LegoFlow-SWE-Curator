@@ -9,8 +9,8 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from swegen.api_logging import init_api_logger
-from swegen.llm_env import get_openai_compatible_config
+from legoflow_curator.api_logging import init_api_logger
+from legoflow_curator.llm_env import get_openai_compatible_config
 from .utils import CombinedPRTaskEvaluation
 
 # API logging setup
@@ -22,7 +22,7 @@ MAX_PR_BODY_LENGTH = 2500
 MAX_TEST_FILE_LENGTH = 3000  # Max chars per test file
 MAX_TOTAL_TEST_LENGTH = 10000  # Max total chars for all test files
 MIN_INSTRUCTION_LENGTH = 100
-OPENAI_API_TIMEOUT = float(os.getenv("SWEGEN_OPENAI_API_TIMEOUT", "300"))
+OPENAI_API_TIMEOUT = float(os.getenv("LEGOFLOW_CURATOR_OPENAI_API_TIMEOUT", "300"))
 MAX_COMPLETION_TOKENS = 16384
 # Support environment variable for model name (for local model deployment)
 MODEL_NAME = os.getenv("OPENAI_MODEL") or os.getenv("ANTHROPIC_MODEL") or "gpt-5.2"
@@ -431,7 +431,7 @@ def evaluate_and_generate_task(
     Raises:
         RuntimeError: If API key is missing or LLM call fails
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
 
     # Check API key
     if not (api_key or os.getenv("OPENAI_API_KEY")):
@@ -528,7 +528,7 @@ def evaluate_and_generate_task(
                             "total_tokens": completion.usage.total_tokens,
                         },
                     },
-                    user="swegen-task-instruction",
+                    user="legoflow-curator-task-instruction",
                     duration_ms=duration_ms,
                 )
             except Exception:

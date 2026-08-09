@@ -23,7 +23,7 @@ class RepoCache:
     def __init__(self, cache_dir: Path | None = None):
         self.cache_dir = (cache_dir or Path(".cache/repos")).resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger("swegen")
+        self.logger = logging.getLogger("legoflow-curator")
 
     # ------------------------------------------------------------------
     # Public API

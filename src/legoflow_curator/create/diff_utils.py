@@ -23,7 +23,7 @@ def get_merge_base(repo_path: Path, base_sha: str, head_sha: str) -> str:
     Returns:
         The merge-base commit SHA
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     try:
         result = subprocess.run(
             ["git", "merge-base", base_sha, head_sha],
@@ -65,7 +65,7 @@ def generate_diffs(
     Returns:
         Tuple of (solution_diff, bug_diff)
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
 
     # Use merge-base to get actual fork point (fixes noisy patches)
     actual_base = get_merge_base(repo_path, base_sha, head_sha)
@@ -139,7 +139,7 @@ def extract_test_files(
     Returns:
         List of successfully extracted test file paths (repo-relative)
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     logger.debug("Extracting test files from HEAD commit...")
 
     # Create tests directory in task output

@@ -15,8 +15,8 @@ from harbor.models.trial.result import TrialResult
 from openai import OpenAI
 from rich.console import Console
 
-from swegen.api_logging import init_api_logger
-from swegen.create.claude_code_utils import (
+from legoflow_curator.api_logging import init_api_logger
+from legoflow_curator.create.claude_code_utils import (
     Colors,
     get_claude_permission_mode,
     print_sdk_message,
@@ -65,7 +65,7 @@ def classify_trial(
     the classification system.
     
     Example:
-        >>> from swegen.analyze import classify_trial
+        >>> from legoflow_curator.analyze import classify_trial
         >>> classification = classify_trial(
         ...     "path/to/trial",
         ...     "path/to/task",
@@ -305,7 +305,7 @@ class TrialClassifier:
                                     "total_tokens": estimate_tokens(prompt) if estimate_tokens else 0,
                                 },
                             },
-                            user="swegen-classifier",
+                            user="legoflow-curator-classifier",
                             duration_ms=duration_ms,
                             success=False,
                             error="Timeout",
@@ -344,7 +344,7 @@ class TrialClassifier:
                                 "total_tokens": prompt_tokens + completion_tokens,
                             },
                         },
-                        user="swegen-classifier",
+                        user="legoflow-curator-classifier",
                         duration_ms=duration_ms,
                     )
                 except Exception:
@@ -372,7 +372,7 @@ class TrialClassifier:
                                 "total_tokens": estimate_tokens(prompt) if estimate_tokens and 'prompt' in locals() else 0,
                             },
                         },
-                        user="swegen-classifier",
+                        user="legoflow-curator-classifier",
                         duration_ms=duration_ms,
                         success=False,
                         error=str(e),
@@ -620,7 +620,7 @@ def _compute_task_verdict_openai(
                             "total_tokens": completion.usage.total_tokens,
                         },
                     },
-                    user="swegen-verdict",
+                    user="legoflow-curator-verdict",
                     duration_ms=duration_ms,
                 )
             except Exception:

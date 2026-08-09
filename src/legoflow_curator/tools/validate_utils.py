@@ -30,7 +30,7 @@ def validate_task_structure(task_dir: Path) -> bool:
     Raises:
         ValidationError: If task structure is invalid with details
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
 
     try:
         # Use Harbor's Task model to validate structure

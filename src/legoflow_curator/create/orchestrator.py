@@ -74,7 +74,7 @@ class PRToHarborPipeline:
 
         Returns the task directory path.
         """
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         logger.debug("Creating task scaffold...")
 
         task_dir = tasks_root / self.task_id
@@ -146,7 +146,7 @@ class PRToHarborPipeline:
             cc_timeout: Timeout for CC session in seconds
             verbose: If True, stream CC output
             use_cache: If True, try to reuse cached artifacts from previous successful PRs
-            state_dir: State directory for task references (default: .swegen)
+            state_dir: State directory for task references (default: .legoflow-curator)
             require_minimum_difficulty: If True, require 3+ source files modified
             min_source_files: Minimum number of source files required (default: 3)
             max_source_files: Maximum number of source files allowed to avoid large refactors (default: 10)
@@ -156,7 +156,7 @@ class PRToHarborPipeline:
             cc_result is None if run_cc=False
             task_reference is None if no cached reference exists or use_cache=False
         """
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         logger.info("=" * 60)
         logger.info("Task Generation")
         logger.info("Repo: %s, PR: #%d", self.repo, self.pr_number)
