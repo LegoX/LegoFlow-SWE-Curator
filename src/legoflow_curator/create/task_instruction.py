@@ -579,16 +579,16 @@ def evaluate_and_generate_task(
                     "present" if instruction_value else "absent"
                 )
             
-            # Add missing 'reason' field if not present
+            # Add a usable 'reason' field when providers omit it or return null.
             # Use the is_substantial value (either from API or just inferred above)
-            if "reason" not in parsed_data:
+            if not isinstance(parsed_data.get("reason"), str) or not parsed_data["reason"].strip():
                 is_substantial = parsed_data.get("is_substantial", False)
                 if is_substantial:
                     parsed_data["reason"] = "PR modifies multiple source files with substantial changes"
                 else:
                     parsed_data["reason"] = "PR does not meet substantiality requirements"
                 fields_added.append("reason")
-                logger.warning("LLM response missing 'reason' field, using fallback value")
+                logger.warning("LLM response missing a valid 'reason' field, using fallback value")
 
             if parsed_data.get("is_substantial") and not isinstance(parsed_data.get("tags"), list):
                 # Fallback follows the 4-tag schema [language, area, topic, bug_class].
