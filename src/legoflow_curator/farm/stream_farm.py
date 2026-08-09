@@ -15,7 +15,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from swegen.config import FarmConfig
+from legoflow_curator.config import FarmConfig
 
 from .farm_hand import (
     PRCandidate,

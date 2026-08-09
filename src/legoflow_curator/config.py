@@ -47,7 +47,7 @@ class CreateConfig:
     cc_timeout: int = 3200
     validate: bool = True
     force: bool = False
-    state_dir: Path = field(default_factory=lambda: Path(".swegen"))
+    state_dir: Path = field(default_factory=lambda: Path(".legoflow-curator"))
     use_cache: bool = True
     require_minimum_difficulty: bool = True
     min_source_files: int = 3
@@ -100,7 +100,7 @@ class FarmConfig:
 
     repo: str
     output: Path = field(default_factory=lambda: Path("tasks"))
-    state_dir: Path = field(default_factory=lambda: Path(".swegen"))
+    state_dir: Path = field(default_factory=lambda: Path(".legoflow-curator"))
     force: bool = True
     timeout: int = 300
     cc_timeout: int = 900
@@ -141,7 +141,7 @@ class ValidateConfig:
     path: Path
     task: str | None = None
     agent: Literal["both", "nop", "oracle"] = "both"
-    jobs_dir: Path = field(default_factory=lambda: Path(".swegen/harbor-jobs"))
+    jobs_dir: Path = field(default_factory=lambda: Path(".legoflow-curator/harbor-jobs"))
     timeout_multiplier: float | None = None
     environment: EnvironmentType = EnvironmentType.DOCKER
     verbose: bool = False

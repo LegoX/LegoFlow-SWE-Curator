@@ -159,7 +159,7 @@ class GitHubPRFetcher:
         timeout: int = 30,
     ) -> requests.Response:
         """Make a GET request with proactive token rotation and 403 retry."""
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         url = f"{self.api_base}{endpoint}"
         if not self._token_order:
             response = requests.get(url, headers=self._build_headers(None, accept), timeout=timeout)
@@ -201,7 +201,7 @@ class GitHubPRFetcher:
         Returns:
             The parent repo in "owner/repo" format, or None if not a fork.
         """
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         try:
             repo_data = self._api_get(f"/repos/{self.repo}")
             if repo_data.get("fork") and repo_data.get("parent"):
@@ -218,7 +218,7 @@ class GitHubPRFetcher:
         Args:
             allow_unmerged: If True, allow unmerged PRs (for testing/preview). Default False.
         """
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         logger.debug("Fetching PR #%s metadata from %s...", self.pr_number, self.repo)
         pr_data = self._api_get(f"/repos/{self.repo}/pulls/{self.pr_number}")
 
@@ -249,7 +249,7 @@ class GitHubPRFetcher:
 
     def fetch_pr_files(self) -> list[dict]:
         """Fetch list of files changed in the PR."""
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         logger.debug("Fetching changed files for PR #%s...", self.pr_number)
         files_response = self._api_get(f"/repos/{self.repo}/pulls/{self.pr_number}/files")
         # API may return dict with pagination info or list directly
@@ -275,7 +275,7 @@ class GitHubPRFetcher:
 
         Returns a list of issue dictionaries with 'number', 'title', and 'body'.
         """
-        logger = logging.getLogger("swegen")
+        logger = logging.getLogger("legoflow-curator")
         logger.debug("Fetching linked issues for PR #%s...", self.pr_number)
 
         # Dict mapping (repo, issue_num) to avoid duplicates

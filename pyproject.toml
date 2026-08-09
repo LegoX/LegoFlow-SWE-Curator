@@ -1,12 +1,12 @@
 [project]
-name = "swegen"
-version = "0.1.1"
-description = "Pipeline to convert GitHub PRs into Harbor tasks"
+name = "legoflow-curator"
+version = "0.2.0"
+description = "LegoFlow pipeline for converting GitHub pull requests into verified Harbor tasks"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.12"
 authors = [
-    {name = "Rishi Desai", email = "rishi@abundant.ai"}
+    {name = "SWE-Lego"}
 ]
 keywords = ["harbor", "terminal-bench", "swe-bench"]
 classifiers = [
@@ -35,13 +35,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/abundant-ai/swe-gen"
-Repository = "https://github.com/abundant-ai/swe-gen"
-Issues = "https://github.com/abundant-ai/swe-gen/issues"
+Homepage = "https://github.com/SWE-Lego/LegoFlow-SWE-Curator"
+Repository = "https://github.com/SWE-Lego/LegoFlow-SWE-Curator"
+Issues = "https://github.com/SWE-Lego/LegoFlow-SWE-Curator/issues"
 
 [project.scripts]
 # Console entry to run the Typer CLI directly
-swegen = "swegen.cli:app"
+legoflow-curator = "legoflow_curator.cli:app"
 harbor = "harbor.cli.main:app"
 
 [project.optional-dependencies]
@@ -68,7 +68,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/swegen"]
+packages = ["src/legoflow_curator"]
 
 [tool.black]
 line-length = 100
@@ -95,10 +95,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["swegen"]
+known-first-party = ["legoflow_curator"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-logger = logging.getLogger("swegen")
+logger = logging.getLogger("legoflow-curator")
 
 
 @dataclass
@@ -27,9 +27,9 @@ class TaskReferenceStore:
         Initialize task reference store.
 
         Args:
-            reference_file: Path to JSON file storing references (default: .swegen/task_references.json)
+            reference_file: Path to JSON file storing references (default: .legoflow-curator/task_references.json)
         """
-        self.reference_file = reference_file or Path(".swegen/task_references.json")
+        self.reference_file = reference_file or Path(".legoflow-curator/task_references.json")
         self.reference_file.parent.mkdir(parents=True, exist_ok=True)
 
     def _load_references(self) -> dict[str, TaskReference]:

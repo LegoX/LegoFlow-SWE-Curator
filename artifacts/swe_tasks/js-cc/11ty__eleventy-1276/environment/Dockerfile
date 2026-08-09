@@ -41,6 +41,6 @@ RUN patch -p1 < /tmp/bug.patch && rm /tmp/bug.patch
 
 # Remove git history (prevents agent from seeing the fix via git log/show),
 # then re-init a fresh repo so that `git diff` can track agent's changes.
-RUN cd /app/src && rm -rf .git && git init && git config user.email "build@swegen" && git config user.name "swegen" && git add -A && git commit -m "baseline" --allow-empty
+RUN cd /app/src && rm -rf .git && git init && git config user.email "build@legoflow-curator" && git config user.name "legoflow-curator" && git add -A && git commit -m "baseline" --allow-empty
 
 WORKDIR /app/src

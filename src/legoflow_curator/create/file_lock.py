@@ -44,7 +44,7 @@ def file_semaphore(
     Yields the slot index that was acquired.
     """
     if max_concurrent is None:
-        max_concurrent = int(os.environ.get("SWEGEN_DOCKER_CONCURRENCY", "8"))
+        max_concurrent = int(os.environ.get("LEGOFLOW_CURATOR_DOCKER_CONCURRENCY", "8"))
     max_concurrent = max(max_concurrent, 1)
 
     lock_dir.mkdir(parents=True, exist_ok=True)

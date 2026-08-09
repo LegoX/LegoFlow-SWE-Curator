@@ -5,7 +5,7 @@ from pathlib import Path
 
 from harbor.models.environment_type import EnvironmentType
 
-from swegen.tools import harbor_runner
+from legoflow_curator.tools import harbor_runner
 
 
 def test_run_harbor_agent_filters_local_dataset_by_task_id(

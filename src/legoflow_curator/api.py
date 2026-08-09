@@ -1,9 +1,9 @@
-"""Public API for SWE-gen.
+"""Public API for LegoFlow Curator.
 
 This module defines the stable, user-facing imports for programmatic use.
 """
 
-from swegen.analyze import (
+from legoflow_curator.analyze import (
     Classification,
     Subtype,
     TaskVerdict,

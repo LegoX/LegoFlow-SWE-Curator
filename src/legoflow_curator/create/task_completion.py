@@ -47,12 +47,12 @@ def get_incomplete_task_reasons(task_dir: Path) -> list[str]:
     if not dockerfile.exists():
         reasons.append("missing environment/Dockerfile")
     elif dockerfile_has_template_placeholders(dockerfile):
-        reasons.append("environment/Dockerfile still has swegen template placeholders")
+        reasons.append("environment/Dockerfile still has legoflow-curator template placeholders")
 
     if not test_sh.exists():
         reasons.append("missing tests/test.sh")
     elif test_sh_has_template_placeholders(test_sh):
-        reasons.append("tests/test.sh still has swegen template placeholders")
+        reasons.append("tests/test.sh still has legoflow-curator template placeholders")
 
     if not fix_patch.exists():
         reasons.append("missing solution/fix.patch")
@@ -60,7 +60,7 @@ def get_incomplete_task_reasons(task_dir: Path) -> list[str]:
     return reasons
 
 
-def _looks_like_swegen_task_dir(task_dir: Path) -> bool:
+def _looks_like_curator_task_dir(task_dir: Path) -> bool:
     markers = (
         task_dir / "instruction.md",
         task_dir / "task.toml",
@@ -80,7 +80,7 @@ def classify_task_dir_state(task_dir: Path) -> TaskCompletionState:
     if not get_incomplete_task_reasons(task_dir):
         return TaskCompletionState.COMPLETE
 
-    if _looks_like_swegen_task_dir(task_dir):
+    if _looks_like_curator_task_dir(task_dir):
         return TaskCompletionState.INCOMPLETE
 
     return TaskCompletionState.OTHER

@@ -6,9 +6,9 @@ from pathlib import Path
 from harbor.models.environment_type import EnvironmentType
 from rich.console import Console
 
-import swegen.cli as cli
-from swegen.create.pr_fetcher import GitHubPRFetcher
-from swegen.create.repo_cache import RepoCache
+import legoflow_curator.cli as cli
+from legoflow_curator.create.pr_fetcher import GitHubPRFetcher
+from legoflow_curator.create.repo_cache import RepoCache
 
 
 class _FakeResponse:
@@ -29,7 +29,7 @@ class _FakeResponse:
 def test_pr_fetcher_round_robins_tokens_before_403(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "")
     monkeypatch.setenv("GITHUB_TOKENS", "tok-1,tok-2")
-    monkeypatch.setattr("swegen.create.pr_fetcher.random.shuffle", lambda seq: None)
+    monkeypatch.setattr("legoflow_curator.create.pr_fetcher.random.shuffle", lambda seq: None)
 
     seen_tokens: list[str] = []
 
@@ -41,7 +41,7 @@ def test_pr_fetcher_round_robins_tokens_before_403(monkeypatch) -> None:
             headers={"X-RateLimit-Remaining": "4999", "X-RateLimit-Reset": "9999999999"},
         )
 
-    monkeypatch.setattr("swegen.create.pr_fetcher.requests.get", fake_get)
+    monkeypatch.setattr("legoflow_curator.create.pr_fetcher.requests.get", fake_get)
 
     fetcher = GitHubPRFetcher("owner/repo", 123)
     fetcher._api_get("/repos/owner/repo/pulls/123")
@@ -53,7 +53,7 @@ def test_pr_fetcher_round_robins_tokens_before_403(monkeypatch) -> None:
 def test_pr_fetcher_retries_other_token_on_403(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "")
     monkeypatch.setenv("GITHUB_TOKENS", "tok-1,tok-2")
-    monkeypatch.setattr("swegen.create.pr_fetcher.random.shuffle", lambda seq: None)
+    monkeypatch.setattr("legoflow_curator.create.pr_fetcher.random.shuffle", lambda seq: None)
 
     seen_tokens: list[str] = []
 
@@ -73,7 +73,7 @@ def test_pr_fetcher_retries_other_token_on_403(monkeypatch) -> None:
             headers={"X-RateLimit-Remaining": "4999", "X-RateLimit-Reset": "9999999999"},
         )
 
-    monkeypatch.setattr("swegen.create.pr_fetcher.requests.get", fake_get)
+    monkeypatch.setattr("legoflow_curator.create.pr_fetcher.requests.get", fake_get)
 
     fetcher = GitHubPRFetcher("owner/repo", 123)
     payload = fetcher._api_get("/repos/owner/repo/pulls/123")
@@ -96,7 +96,7 @@ def test_repo_cache_ensure_commit_available_prefers_targeted_fetch(monkeypatch, 
             return subprocess.CompletedProcess(cmd, 0)
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr("swegen.create.repo_cache.subprocess.run", fake_run)
+    monkeypatch.setattr("legoflow_curator.create.repo_cache.subprocess.run", fake_run)
 
     cache = RepoCache(tmp_path)
     cache._ensure_commit_available(tmp_path, "deadbeef", pr_number=123)
@@ -121,7 +121,7 @@ def test_repo_cache_ensure_commit_available_falls_back_to_pr_ref(monkeypatch, tm
             return subprocess.CompletedProcess(cmd, 0)
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr("swegen.create.repo_cache.subprocess.run", fake_run)
+    monkeypatch.setattr("legoflow_curator.create.repo_cache.subprocess.run", fake_run)
 
     cache = RepoCache(tmp_path)
     cache._ensure_commit_available(tmp_path, "deadbeef", pr_number=321)
@@ -174,7 +174,7 @@ def test_maybe_prune_create_docker_respects_batch_and_env(monkeypatch, tmp_path:
 def test_run_create_docker_maintenance_honors_cooldown(monkeypatch, tmp_path: Path) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/docker")
-    monkeypatch.setenv("SWEGEN_DOCKER_MAINTENANCE_COOLDOWN_MINUTES", "60")
+    monkeypatch.setenv("LEGOFLOW_CURATOR_DOCKER_MAINTENANCE_COOLDOWN_MINUTES", "60")
 
     def fake_run(cmd: list[str], check: bool, capture_output: bool, timeout: int):
         commands.append(cmd)

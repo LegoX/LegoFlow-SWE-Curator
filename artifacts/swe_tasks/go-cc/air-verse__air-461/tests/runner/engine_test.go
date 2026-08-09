@@ -634,7 +634,7 @@ func generateQuickExitGoCode(dir string) error {
 import "fmt"
 
 func main() {
-	fmt.Println("Hello, 世界")
+	fmt.Println("Hello, \u4e16\u754c")
 }
 `
 	file, err := os.Create(dir + "/main.go")
@@ -668,7 +668,7 @@ func generateBuildErrorGoCode(dir string) error {
 // Click here and start typing.
 
 func main() {
-	Println("Hello, 世界")
+	Println("Hello, \u4e16\u754c")
 
 }
 `

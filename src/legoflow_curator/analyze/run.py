@@ -26,7 +26,7 @@ from .classifier import (
     compute_task_verdict,
     VERDICT_MODEL,
 )
-from swegen.tools.harbor_runner import (
+from legoflow_curator.tools.harbor_runner import (
     harbor_cmd_base,
     parse_harbor_outcome,
     run_harbor_agent,
@@ -118,7 +118,7 @@ class AnalyzeArgs:
     model: str = "anthropic/claude-sonnet-4-5"
     n_trials: int = 3
     n_concurrent: int = 1  # Number of concurrent trials (matches Harbor's -n flag)
-    jobs_dir: Path = Path(".swegen/analyze-jobs")
+    jobs_dir: Path = Path(".legoflow-curator/analyze-jobs")
     skip_quality_check: bool = False
     skip_baseline: bool = False  # Skip baseline validation (nop/oracle)
     skip_classify: bool = False  # Skip Claude Code classification

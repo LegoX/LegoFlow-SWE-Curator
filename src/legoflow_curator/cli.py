@@ -24,27 +24,27 @@ from openai import OpenAI
 import requests
 from rich.console import Console
 
-from swegen.config import CreateConfig, FarmConfig
-from swegen.create import MissingIssueError, TrivialPRError
-from swegen.create.create import (
+from legoflow_curator.config import CreateConfig, FarmConfig
+from legoflow_curator.create import MissingIssueError, TrivialPRError
+from legoflow_curator.create.create import (
     CaseTimeoutError,
     append_verifiable_task,
     run_reversal_with_timeout,
 )
-from swegen.create.file_lock import file_lock, file_semaphore
-from swegen.create.task_completion import (
+from legoflow_curator.create.file_lock import file_lock, file_semaphore
+from legoflow_curator.create.task_completion import (
     TaskCompletionState,
     classify_task_dir_state,
     get_incomplete_task_reasons,
     task_has_completed_files,
 )
-from swegen.farm import StreamFarmer
-from swegen.scoring import score_task, update_task_toml_difficulty
-from swegen.analyze import AnalyzeArgs, run_analyze
-from swegen.analyze.classifier import VERDICT_MODEL
-from swegen.llm_env import get_openai_compatible_config, hydrate_cross_provider_env
-from swegen.tools.validate import ValidateArgs, run_validate
-from swegen.tools.validate_utils import ValidationError, run_nop_oracle, check_validation_passed
+from legoflow_curator.farm import StreamFarmer
+from legoflow_curator.scoring import score_task, update_task_toml_difficulty
+from legoflow_curator.analyze import AnalyzeArgs, run_analyze
+from legoflow_curator.analyze.classifier import VERDICT_MODEL
+from legoflow_curator.llm_env import get_openai_compatible_config, hydrate_cross_provider_env
+from legoflow_curator.tools.validate import ValidateArgs, run_validate
+from legoflow_curator.tools.validate_utils import ValidationError, run_nop_oracle, check_validation_passed
 
 load_dotenv()
 
@@ -60,8 +60,8 @@ def _run_create_docker_maintenance(console: Console, state_dir: Path) -> bool:
     if shutil.which("docker") is None:
         return False
 
-    cooldown_minutes = int(os.environ.get("SWEGEN_DOCKER_MAINTENANCE_COOLDOWN_MINUTES", "30"))
-    builder_until = os.environ.get("SWEGEN_DOCKER_MAINTENANCE_BUILDER_UNTIL", "24h")
+    cooldown_minutes = int(os.environ.get("LEGOFLOW_CURATOR_DOCKER_MAINTENANCE_COOLDOWN_MINUTES", "30"))
+    builder_until = os.environ.get("LEGOFLOW_CURATOR_DOCKER_MAINTENANCE_BUILDER_UNTIL", "24h")
     lock_path = state_dir / "locks" / "docker" / "maintenance.lock"
     stamp_path = state_dir / "locks" / "docker" / "maintenance.last"
     now = time.time()
@@ -392,15 +392,15 @@ def _root(
         False,
         "--version",
         "-V",
-        help="Show swegen version and exit",
+        help="Show legoflow-curator version and exit",
         is_eager=True,
     ),
 ) -> None:
     if version:
         try:
-            typer.echo(f"swegen {_pkg_version('swe-gen')}")
+            typer.echo(f"legoflow-curator {_pkg_version('legoflow-curator')}")
         except _PkgNotFound:
-            typer.echo("swegen (version unknown)")
+            typer.echo("legoflow-curator (version unknown)")
         raise typer.Exit()
 
 
@@ -455,7 +455,7 @@ def create_cmd(
     ),
     force: bool = typer.Option(False, help="Bypass local dedupe and regenerate"),
     state_dir: Path = typer.Option(
-        Path(".swegen"), help="Local dedupe state dir", show_default=True
+        Path(".legoflow-curator"), help="Local dedupe state dir", show_default=True
     ),
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Disable reusing cached Dockerfiles/test.sh from previous tasks"
@@ -739,7 +739,7 @@ def create_cmd(
             "insufficient_quota",
             "remainquota",
             "quota exceeded",
-            "额度已用尽",  # upstream provider's zh error text for "quota exhausted"; kept verbatim to match it
+            "\u989d\u5ea6\u5df2\u7528\u5c3d",  # upstream provider's zh error text for "quota exhausted"; kept verbatim to match it
             "authenticationerror",
             "invalid api key",
             "incorrect api key",
@@ -889,7 +889,7 @@ def create_cmd(
         max_retry = 3
         input_abs = input_ids_file.resolve()
         output.mkdir(parents=True, exist_ok=True)
-        state_root = output / ".swegen-create-batch"
+        state_root = output / ".legoflow-curator-create-batch"
         state_root.mkdir(parents=True, exist_ok=True)
         state_file = state_root / f"{hashlib.sha1(str(input_abs).encode('utf-8')).hexdigest()}.json"
 
@@ -1630,7 +1630,7 @@ def validate(
     | None = typer.Option(None, "--task", "-t", help="Task ID when --path points to dataset root"),
     agent: str = typer.Option("both", help="Agent to run: both|nop|oracle", show_default=True),
     jobs_dir: Path = typer.Option(
-        Path(".swegen/harbor-jobs"),
+        Path(".legoflow-curator/harbor-jobs"),
         help="Directory to store Harbor job artifacts",
         show_default=True,
     ),
@@ -1703,7 +1703,7 @@ def analyze(
         3, "-n", "--n-concurrent", help="Number of concurrent trials (1=sequential, 3-5 recommended)", show_default=True
     ),
     jobs_dir: Path = typer.Option(
-        Path(".swegen/analyze-jobs"),
+        Path(".legoflow-curator/analyze-jobs"),
         "--jobs-dir",
         help="Directory to store job artifacts",
         show_default=True,
@@ -1777,10 +1777,10 @@ def analyze(
 
     Examples:
         # Sequential (default)
-        swegen analyze tasks/my-task -k 5
+        legoflow-curator analyze tasks/my-task -k 5
 
         # Parallel (3 trials at once)
-        swegen analyze tasks/my-task -k 10 -n 3
+        legoflow-curator analyze tasks/my-task -k 10 -n 3
     """
     run_analyze(
         AnalyzeArgs(
@@ -1815,7 +1815,7 @@ def farm(
         Path("tasks"), help="Output directory for generated tasks", show_default=True
     ),
     state_dir: Path = typer.Option(
-        Path(".swegen"), help="State directory for cache/logs", show_default=True
+        Path(".legoflow-curator"), help="State directory for cache/logs", show_default=True
     ),
     force: bool = typer.Option(True, help="Regenerate even if task already exists"),
     timeout: int = typer.Option(300, help="Timeout per PR in seconds", show_default=True),

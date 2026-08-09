@@ -99,7 +99,7 @@ test("Test url filter with passthrough urls", (t) => {
 
   // these tests were failing without the http/https bypass—upstream issues with valid-url
   t.is(url("http://✪df.ws/123", ""), "http://✪df.ws/123");
-  t.is(url("http://➡.ws/䨹", ""), "http://➡.ws/䨹");
+  t.is(url("http://➡.ws/\u4a39", ""), "http://➡.ws/\u4a39");
   t.is(url("http://⌘.ws", ""), "http://⌘.ws");
   t.is(url("http://⌘.ws/", ""), "http://⌘.ws/");
   t.is(
@@ -108,7 +108,7 @@ test("Test url filter with passthrough urls", (t) => {
   );
   t.is(url("http://☺.damowmow.com/", ""), "http://☺.damowmow.com/");
   t.is(url("http://مثال.إختبار", ""), "http://مثال.إختبار");
-  t.is(url("http://例子.测试", ""), "http://例子.测试");
+  t.is(url("http://\u4f8b\u5b50.\u6d4b\u8bd5", ""), "http://\u4f8b\u5b50.\u6d4b\u8bd5");
   t.is(url("http://उदाहरण.परीक्षा", ""), "http://उदाहरण.परीक्षा");
 });
 

@@ -1,4 +1,4 @@
-from swegen.analyze.models import (
+from legoflow_curator.analyze.models import (
     BaselineResult,
     BaselineValidation,
     Classification,
@@ -6,12 +6,12 @@ from swegen.analyze.models import (
     TaskVerdict,
     TrialClassification,
 )
-from swegen.analyze.classifier import (
+from legoflow_curator.analyze.classifier import (
     TrialClassifier,
     classify_trial,
     compute_task_verdict,
 )
-from swegen.analyze.run import AnalyzeArgs, AnalysisResult, run_analyze
+from legoflow_curator.analyze.run import AnalyzeArgs, AnalysisResult, run_analyze
 
 __all__ = [
     "AnalysisResult",

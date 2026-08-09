@@ -18,9 +18,9 @@ from rich.table import Table
 from rich.text import Text
 from rich.traceback import install as rich_traceback_install
 
-from swegen.config import CreateConfig
-from swegen.tools.harbor_runner import parse_harbor_outcome, run_harbor_agent
-from swegen.tools.validate_utils import ValidationError, run_nop_oracle
+from legoflow_curator.config import CreateConfig
+from legoflow_curator.tools.harbor_runner import parse_harbor_outcome, run_harbor_agent
+from legoflow_curator.tools.validate_utils import ValidationError, run_nop_oracle
 
 from . import MissingIssueError, PRToHarborPipeline, TrivialPRError
 from .claude_code_runner import ClaudeCodeResult, run_claude_code_session
@@ -83,7 +83,7 @@ def append_verifiable_task(output_dir: Path, task_id: str) -> None:
     Performs a completeness check before appending: the task's Dockerfile and
     test.sh must exist and must not contain TODO placeholders.
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     task_path = output_dir / task_id
     if not task_has_completed_files(task_path):
         reasons = "; ".join(get_incomplete_task_reasons(task_path)) or "task is incomplete"
@@ -124,7 +124,7 @@ def _check_linked_issues(
     try:
         linked_issues = pipeline.pr_fetcher.fetch_linked_issues()
     except Exception as e:
-        logging.getLogger("swegen").debug("Could not fetch linked issues: %s", str(e))
+        logging.getLogger("legoflow-curator").debug("Could not fetch linked issues: %s", str(e))
 
     if require_issue:
         if not linked_issues:
@@ -168,7 +168,7 @@ def _check_dedupe(
         return False
 
     last_rec = None
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     lock_file = state_file.with_suffix(".lock")
     with file_lock(lock_file, timeout=120):
         with open(state_file) as f:
@@ -332,7 +332,7 @@ def _save_state_record(
 
     This is non-fatal - errors are logged but do not stop execution.
     """
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
         rec = {
@@ -509,7 +509,7 @@ def run_reversal(config: CreateConfig) -> str:
         # Simple local dedupe: check-before
         # Lowercase repo for consistency (GitHub is case-insensitive, Docker requires lowercase)
         repo_key = f"{pipeline.repo.lower()}#{config.pr}"
-        state_dir: Path = config.state_dir or Path(".swegen")
+        state_dir: Path = config.state_dir or Path(".legoflow-curator")
         state_file = state_dir / "create.jsonl"
         if _check_dedupe(console, repo_key, state_file, config.force):
             return
@@ -697,7 +697,7 @@ def run_reversal(config: CreateConfig) -> str:
             harbor_jobs = (
                 config.state_dir / "harbor-jobs"
                 if isinstance(config.state_dir, Path)
-                else Path(".swegen") / "harbor-jobs"
+                else Path(".legoflow-curator") / "harbor-jobs"
             )
             harbor_jobs = harbor_jobs.resolve()
             harbor_jobs.mkdir(parents=True, exist_ok=True)
@@ -803,7 +803,7 @@ def _run_harbor_with_status(
 
 
 def _configure_file_logger(path: Path) -> None:
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
     # Clear existing handlers

@@ -4,10 +4,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-import swegen.cli as cli
-from swegen.create.create import append_verifiable_task
-from swegen.create.orchestrator import PRToHarborPipeline
-from swegen.create.task_completion import (
+import legoflow_curator.cli as cli
+from legoflow_curator.create.create import append_verifiable_task
+from legoflow_curator.create.orchestrator import PRToHarborPipeline
+from legoflow_curator.create.task_completion import (
     TaskCompletionState,
     classify_task_dir_state,
     task_has_completed_files,

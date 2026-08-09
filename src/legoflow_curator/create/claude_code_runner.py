@@ -15,14 +15,14 @@ from claude_agent_sdk import (
     query,
 )
 
-from swegen.api_logging import init_api_logger
-from swegen.create.claude_code_utils import (
+from legoflow_curator.api_logging import init_api_logger
+from legoflow_curator.create.claude_code_utils import (
     Colors,
     get_claude_permission_mode,
     print_sdk_message,
 )
-from swegen.llm_env import get_anthropic_compatible_config
-from swegen.tools.harbor_runner import parse_harbor_outcome
+from legoflow_curator.llm_env import get_anthropic_compatible_config
+from legoflow_curator.tools.harbor_runner import parse_harbor_outcome
 
 # API logging setup
 _api_logger_available, log_completion, estimate_tokens = init_api_logger(__file__)
@@ -810,7 +810,7 @@ async def _run_claude_code_session_async(
     environment: str = "docker",
 ) -> ClaudeCodeResult:
     """Async implementation of Claude Code session."""
-    logger = logging.getLogger("swegen")
+    logger = logging.getLogger("legoflow-curator")
     logger.info("Starting Claude Code session for: %s", task_id)
 
     # Resolve all paths to absolute paths for reliable usage
@@ -819,7 +819,7 @@ async def _run_claude_code_session_async(
     repo_path = Path(repo_path).resolve()
 
     # Jobs directory for harbor output
-    jobs_dir = dataset_path / ".swegen" / "harbor-jobs"
+    jobs_dir = dataset_path / ".legoflow-curator" / "harbor-jobs"
     jobs_dir.mkdir(parents=True, exist_ok=True)
     jobs_dir = jobs_dir.resolve()
 
@@ -977,7 +977,7 @@ async def _run_claude_code_session_async(
                                 "total_tokens": estimate_tokens(prompt_text) if estimate_tokens else 0,
                             },
                         },
-                        user="swegen-claude-code",
+                        user="legoflow-curator-claude-code",
                         duration_ms=duration_ms,
                         success=False,
                         error="Timeout",
@@ -1005,7 +1005,7 @@ async def _run_claude_code_session_async(
                             "total_tokens": prompt_tokens + completion_tokens,
                         },
                     },
-                    user="swegen-claude-code",
+                    user="legoflow-curator-claude-code",
                     duration_ms=duration_ms,
                 )
             except Exception:
@@ -1039,7 +1039,7 @@ async def _run_claude_code_session_async(
                             "total_tokens": prompt_tokens,
                         },
                     },
-                    user="swegen-claude-code",
+                    user="legoflow-curator-claude-code",
                     duration_ms=duration_ms,
                     success=False,
                     error=str(e),

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Difficulty scoring + 4-tag metadata tagging for SWE task datasets.
 
-This is the single, canonical tagging tool for SWE-gen. It scores difficulty
+This is the single, canonical tagging tool for LegoFlow Curator. It scores difficulty
 (static, no API) and generates the 4-tag metadata (LLM) in one pass, operating
 over unified JSONL datasets (`<datasets-dir>/<id>/tasks.jsonl`).
 
 Methodology:
   * Difficulty: the 5-dimension weighted, log-scaled model defined in
-      `swegen.scoring` (`score_from_text`) — the same scorer `swegen create`
+      `legoflow_curator.scoring` (`score_from_text`) — the same scorer `legoflow-curator create`
       uses, so difficulty is identical across the pipeline and the databoard.
   * Tags: exactly 4 in order [language, area, topic, bug_class] via an LLM,
       where area ∈ {backend, frontend, fullstack, cli, library, framework}.
@@ -40,11 +40,11 @@ from typing import Any, TypeVar
 
 import requests
 
-# Difficulty scoring is defined once in the swegen package and shared with
-# `swegen create`. Prefer the co-located package so this tool always uses the
-# same scorer it ships with, regardless of any other installed swegen.
+# Difficulty scoring is defined once in the legoflow-curator package and shared with
+# `legoflow-curator create`. Prefer the co-located package so this tool always uses the
+# same scorer it ships with, regardless of any other installed legoflow_curator.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from swegen.scoring import score_from_text
+from legoflow_curator.scoring import score_from_text
 
 DATASET_IDS = ["self_made", "swe_rebench", "swe_rebench_v2", "openswe_filtered", "scale_swe"]
 

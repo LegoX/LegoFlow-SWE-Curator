@@ -8,8 +8,8 @@ from typing import Any
 
 
 def _find_project_root(anchor_file: Path) -> Path | None:
-    """Find the SWE-gen project root from file location and current working directory."""
-    env_root = os.getenv("SWEGEN_PROJECT_ROOT")
+    """Find the LegoFlow Curator project root from file location and current working directory."""
+    env_root = os.getenv("LEGOFLOW_CURATOR_PROJECT_ROOT")
     if env_root:
         candidate = Path(env_root).expanduser().resolve()
         if (candidate / "local_api_logger").is_dir():
@@ -48,7 +48,7 @@ def init_api_logger(
     except ImportError:
         return False, _noop_log_completion, None
 
-    log_dir = os.getenv("SWEGEN_API_LOG_DIR")
+    log_dir = os.getenv("LEGOFLOW_CURATOR_API_LOG_DIR")
     if log_dir:
         resolved_log_dir = Path(log_dir).expanduser().resolve()
     elif root is not None:

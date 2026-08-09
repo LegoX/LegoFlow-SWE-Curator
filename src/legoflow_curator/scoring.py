@@ -1,9 +1,9 @@
-"""Difficulty scoring for SWE-gen tasks.
+"""Difficulty scoring for LegoFlow Curator tasks.
 
 This module is the single source of truth for difficulty scoring. Both callers
 share the exact same algorithm, weights, and thresholds:
 
-  * `swegen create` (via `score_task`, reading a task directory on disk), and
+  * `legoflow-curator create` (via `score_task`, reading a task directory on disk), and
   * the dataset tagger `tools/tag_task_metadata.py` (via `score_from_text`,
     operating on patch/test diff text).
 
@@ -194,7 +194,7 @@ def score_from_text(patch_text: str, test_text: str, instruction: str) -> dict[s
 
 
 # ---------------------------------------------------------------------------
-# Disk entry point (used by `swegen create` over task directories)
+# Disk entry point (used by `legoflow-curator create` over task directories)
 # ---------------------------------------------------------------------------
 
 def _count_test_files(task_dir: Path) -> tuple[int, int]:
