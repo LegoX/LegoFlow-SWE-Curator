@@ -50,6 +50,34 @@ def _resolve_sdk_model(requested_model: str | None) -> tuple[str, bool]:
     return "claude-sonnet-4-6", True
 
 
+def _build_sdk_runtime_env(
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+    task_dir: Path,
+) -> tuple[dict[str, str], Path]:
+    """Build a reproducible Claude SDK environment isolated from user config."""
+    sdk_env: dict[str, str] = {}
+    if api_key:
+        sdk_env["ANTHROPIC_API_KEY"] = api_key
+        sdk_env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    if base_url:
+        sdk_env["ANTHROPIC_BASE_URL"] = base_url
+    if model:
+        sdk_env["ANTHROPIC_MODEL"] = model
+
+    claude_home = Path(
+        os.environ.get(
+            "LEGOFLOW_CURATOR_CLAUDE_HOME",
+            str(task_dir.parent / ".legoflow-curator" / "claude-home"),
+        )
+    ).resolve()
+    claude_home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    sdk_env["HOME"] = str(claude_home)
+    sdk_env["CLAUDE_CONFIG_DIR"] = str(claude_home / ".claude")
+    return sdk_env, claude_home
+
+
 @dataclass
 class ClaudeCodeResult:
     """Result of the CC session."""
@@ -892,6 +920,9 @@ async def _run_claude_code_session_async(
         # Support third-party API: use model, api_key, and base_url from env vars
         requested_model, api_key, base_url = get_anthropic_compatible_config()
         model, used_fallback_mapping = _resolve_sdk_model(requested_model)
+        if verbose:
+            print(f"[SDK] Model: {model}", flush=True)
+            print(f"[SDK] API base: {base_url or '<default>'}", flush=True)
         if used_fallback_mapping:
             logger.warning(
                 "Non-Claude ANTHROPIC_MODEL=%r detected; mapping Claude Code SDK model to %r",
@@ -899,14 +930,16 @@ async def _run_claude_code_session_async(
                 model,
             )
 
-        # Build env dict for SDK - explicitly pass API config for third-party API support
-        sdk_env = {}
-        if api_key:
-            sdk_env["ANTHROPIC_API_KEY"] = api_key
-        if base_url:
-            sdk_env["ANTHROPIC_BASE_URL"] = base_url
-        if requested_model:
-            sdk_env["ANTHROPIC_MODEL"] = model
+        # Explicitly pass API config and isolate user-level settings that can
+        # silently override the requested provider.
+        sdk_env, claude_home = _build_sdk_runtime_env(
+            api_key,
+            base_url,
+            model if requested_model else None,
+            task_dir,
+        )
+        if verbose:
+            print(f"[SDK] Isolated HOME: {claude_home}", flush=True)
 
         options = ClaudeAgentOptions(
             allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "LS", "Bash"],

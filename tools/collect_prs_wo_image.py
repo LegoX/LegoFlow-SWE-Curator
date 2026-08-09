@@ -199,11 +199,9 @@ def format_recovery_time(seconds: float) -> str:
             return f"{hours} h"
 
 
-def mask_token(token: str) -> str:
-    """Return a non-secret token preview for logs."""
-    if len(token) <= 12:
-        return token[:4] + "..."
-    return f"{token[:8]}...{token[-4:]}"
+def mask_token(_token: str) -> str:
+    """Return a fully redacted token marker for logs."""
+    return "<redacted>"
 
 
 def normalize_proxy_url(proxy_url: str) -> Optional[str]:
@@ -702,9 +700,7 @@ def validate_github_tokens(
                     reset_time = 0
 
                 if response.status_code == 200:
-                    user_info = response.json()
-                    username = user_info.get('login', 'unknown')
-                    print(f"  ✓ Token valid: {mask_token(token)} (user: {username}, remaining: {remaining})")
+                    print(f"  ✓ Token valid: {mask_token(token)} (remaining: {remaining})")
                     valid_tokens.append(token)
                     # Store rate limit info for valid tokens
                     token_rate_limits[token] = {

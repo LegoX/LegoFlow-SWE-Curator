@@ -9,9 +9,9 @@ DISALLOWED_TEXT = (
     "swe" + "gen",
     "SWE-" + "gen",
     "SWE-Lego-" + "Live",
-    "/gpufs/",
+    "/gpu" + "fs/",
     "/home/" + "haoli",
-    "ywxzml3j",
+    "ywx" + "zml3j",
 )
 
 DISALLOWED_PATTERNS = (
