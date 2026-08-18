@@ -1,0 +1,175 @@
+diff --git a/electricitymap/contrib/config/constants.py b/electricitymap/contrib/config/constants.py
+index 8d28d2f77..d87ba416c 100644
+--- a/electricitymap/contrib/config/constants.py
++++ b/electricitymap/contrib/config/constants.py
+@@ -2,7 +2,6 @@
+ 
+ EXCHANGE_FILENAME_ZONE_SEPARATOR = "_"
+ 
+-EXCHANGE_DATA_TYPES = ["exchange", "exchangeForecast"]
+ 
+ WEATHER_GFS_KEYS = ["wind", "solar", "temperature", "dewpoint", "precipitation"]
+ WEATHER_DATABASE_KEYS = [
+diff --git a/electricitymap/contrib/lib/data_types.py b/electricitymap/contrib/lib/data_types.py
+new file mode 100644
+index 000000000..26af50914
+--- /dev/null
++++ b/electricitymap/contrib/lib/data_types.py
+@@ -0,0 +1,29 @@
++from enum import Enum
++
++
++class ParserDataType(Enum):
++    CONSUMPTION = "consumption"
++    CONSUMPTION_FORECAST = "consumptionForecast"
++    DAYAHEAD_LOCATIONAL_MARGINAL_PRICE = "dayaheadLocationalMarginalPrice"
++    EXCHANGE_FORECAST = "exchangeForecast"
++    EXCHANGE = "exchange"
++    GENERATION_FORECAST = "generationForecast"
++    PRICE = "price"
++    PRODUCTION = "production"
++    PRODUCTION_PER_MODE_FORECAST = "productionPerModeForecast"
++    REALTIME_LOCATIONAL_MARGINAL_PRICE = "realtimeLocationalMarginalPrice"
++    # TODO: Deprecate
++    PRODUCTION_PER_UNIT = "productionPerUnit"
++    # TODO: Double check if we should keep them here?
++    PRODUCTION_CAPACITY = "productionCapacity"
++
++    def __str__(self) -> str:
++        return self.value
++
++
++ALL_DATA_TYPES = [dt.value for dt in ParserDataType]
++EXCHANGE_DATA_TYPES = [ParserDataType.EXCHANGE, ParserDataType.EXCHANGE_FORECAST]
++LMP_DATA_TYPES = [
++    ParserDataType.REALTIME_LOCATIONAL_MARGINAL_PRICE,
++    ParserDataType.DAYAHEAD_LOCATIONAL_MARGINAL_PRICE,
++]
+diff --git a/parsers/lib/parsers.py b/parsers/lib/parsers.py
+index 139f14824..0daa1f9a3 100644
+--- a/parsers/lib/parsers.py
++++ b/parsers/lib/parsers.py
+@@ -1,12 +1,12 @@
+ import importlib
+ 
+ from electricitymap.contrib.config import EXCHANGES_CONFIG, ZONES_CONFIG
++from electricitymap.contrib.lib.data_types import ParserDataType
+ 
+ # Prepare all parsers
+ CONSUMPTION_PARSERS = {}
+ PRODUCTION_PARSERS = {}
+ PRODUCTION_PER_MODE_FORECAST_PARSERS = {}
+-PRODUCTION_PER_UNIT_PARSERS = {}
+ EXCHANGE_PARSERS = {}
+ PRICE_PARSERS = {}
+ CONSUMPTION_FORECAST_PARSERS = {}
+@@ -15,28 +15,34 @@ EXCHANGE_FORECAST_PARSERS = {}
+ PRODUCTION_CAPACITY_PARSERS = {}
+ DAYAHEAD_LOCATIONAL_MARGINAL_PRICE_PARSERS = {}
+ REALTIME_LOCATIONAL_MARGINAL_PRICE_PARSERS = {}
++# TODO remove
++PRODUCTION_PER_UNIT_PARSERS = {}
+ 
+-PARSER_KEY_TO_DICT = {
+-    "consumption": CONSUMPTION_PARSERS,
+-    "production": PRODUCTION_PARSERS,
+-    "productionPerUnit": PRODUCTION_PER_UNIT_PARSERS,
+-    "productionPerModeForecast": PRODUCTION_PER_MODE_FORECAST_PARSERS,
+-    "exchange": EXCHANGE_PARSERS,
+-    "price": PRICE_PARSERS,
+-    "dayaheadLocationalMarginalPrice": DAYAHEAD_LOCATIONAL_MARGINAL_PRICE_PARSERS,
+-    "realtimeLocationalMarginalPrice": REALTIME_LOCATIONAL_MARGINAL_PRICE_PARSERS,
+-    "consumptionForecast": CONSUMPTION_FORECAST_PARSERS,
+-    "generationForecast": GENERATION_FORECAST_PARSERS,
+-    "exchangeForecast": EXCHANGE_FORECAST_PARSERS,
+-    "productionCapacity": PRODUCTION_CAPACITY_PARSERS,
++PARSER_DATA_TYPE_TO_DICT = {
++    ParserDataType.CONSUMPTION: CONSUMPTION_PARSERS,
++    ParserDataType.CONSUMPTION_FORECAST: CONSUMPTION_FORECAST_PARSERS,
++    ParserDataType.DAYAHEAD_LOCATIONAL_MARGINAL_PRICE: DAYAHEAD_LOCATIONAL_MARGINAL_PRICE_PARSERS,
++    ParserDataType.EXCHANGE: EXCHANGE_PARSERS,
++    ParserDataType.EXCHANGE_FORECAST: EXCHANGE_FORECAST_PARSERS,
++    ParserDataType.GENERATION_FORECAST: GENERATION_FORECAST_PARSERS,
++    ParserDataType.PRICE: PRICE_PARSERS,
++    ParserDataType.PRODUCTION: PRODUCTION_PARSERS,
++    ParserDataType.PRODUCTION_PER_MODE_FORECAST: PRODUCTION_PER_MODE_FORECAST_PARSERS,
++    ParserDataType.REALTIME_LOCATIONAL_MARGINAL_PRICE: REALTIME_LOCATIONAL_MARGINAL_PRICE_PARSERS,
++    ParserDataType.PRODUCTION_CAPACITY: PRODUCTION_CAPACITY_PARSERS,
++    # TODO - support productionPerUnit for now, remove support in a follow-up PR
++    # https://electricitymaps.slack.com/archives/C08LH4L9PFB/p1746519910179509
++    ParserDataType.PRODUCTION_PER_UNIT: PRODUCTION_PER_UNIT_PARSERS,
+ }
+ 
+ 
+-def _parser_key_to_parser_folder(parser_key: str):
++def _parser_key_to_parser_folder(parser_key: ParserDataType):
++    CAPACITY_PARSERS_FOLDER = "electricitymap.contrib.capacity_parsers"
++    DEFAULT_PARSERS_FOLDER = "parsers"
+     return (
+-        "electricitymap.contrib.capacity_parsers"
+-        if parser_key == "productionCapacity"
+-        else "parsers"
++        CAPACITY_PARSERS_FOLDER
++        if parser_key == ParserDataType.PRODUCTION_CAPACITY
++        else DEFAULT_PARSERS_FOLDER
+     )
+ 
+ 
+@@ -44,15 +50,29 @@ def _parser_key_to_parser_folder(parser_key: str):
+ for zone_id, zone_config in ZONES_CONFIG.items():
+     for parser_key, v in zone_config.get("parsers", {}).items():
+         mod_name, fun_name = v.split(".")
++        try:
++            _parser_key = ParserDataType(parser_key)
++        except ValueError:
++            raise ValueError(
++                f"Invalid parser key: {parser_key} for zone: {zone_id}"
++            ) from None
+         mod = importlib.import_module(
+-            f"{_parser_key_to_parser_folder(parser_key)}.{mod_name}"
++            f"{_parser_key_to_parser_folder(_parser_key)}.{mod_name}"
+         )
+-        PARSER_KEY_TO_DICT[parser_key][zone_id] = getattr(mod, fun_name)
++        PARSER_DATA_TYPE_TO_DICT[_parser_key][zone_id] = getattr(mod, fun_name)
+ 
+ 
+ # Read all exchanges
+ for exchange_id, exchange_config in EXCHANGES_CONFIG.items():
+     for parser_key, v in exchange_config.get("parsers", {}).items():
++        try:
++            _parser_key = ParserDataType(parser_key)
++        except ValueError:
++            raise ValueError(
++                f"Invalid parser key: {parser_key} for exchange: {exchange_id}"
++            ) from None
+         mod_name, fun_name = v.split(".")
+-        mod = importlib.import_module(f"parsers.{mod_name}")
+-        PARSER_KEY_TO_DICT[parser_key][exchange_id] = getattr(mod, fun_name)
++        mod = importlib.import_module(
++            f"{_parser_key_to_parser_folder(_parser_key)}.{mod_name}"
++        )
++        PARSER_DATA_TYPE_TO_DICT[_parser_key][exchange_id] = getattr(mod, fun_name)
+diff --git a/scripts/update_capacity_configuration.py b/scripts/update_capacity_configuration.py
+index 51c7367c7..5501649e3 100644
+--- a/scripts/update_capacity_configuration.py
++++ b/scripts/update_capacity_configuration.py
+@@ -10,8 +10,9 @@ from requests import Session
+ from electricitymap.contrib.config import CONFIG_DIR, ZONE_PARENT
+ from electricitymap.contrib.config.constants import PRODUCTION_MODES, STORAGE_MODES
+ from electricitymap.contrib.config.reading import read_zones_config
++from electricitymap.contrib.lib.data_types import ParserDataType
+ from electricitymap.contrib.lib.types import ZoneKey
+-from parsers.lib.parsers import PARSER_KEY_TO_DICT
++from parsers.lib.parsers import PARSER_DATA_TYPE_TO_DICT
+ from scripts.utils import write_zone_config
+ 
+ logger = getLogger(__name__)
+@@ -20,7 +21,7 @@ ZONES_CONFIG = read_zones_config(CONFIG_DIR)
+ CAPACITY_MODES = PRODUCTION_MODES + [f"{mode} storage" for mode in STORAGE_MODES]
+ 
+ 
+-CAPACITY_PARSERS = PARSER_KEY_TO_DICT["productionCapacity"]
++CAPACITY_PARSERS = PARSER_DATA_TYPE_TO_DICT[ParserDataType.PRODUCTION_CAPACITY]
+ 
+ # Get productionCapacity source to zones mapping
+ CAPACITY_PARSER_SOURCE_TO_ZONES = {}

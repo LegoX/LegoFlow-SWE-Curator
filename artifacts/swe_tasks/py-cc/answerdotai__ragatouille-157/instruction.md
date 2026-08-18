@@ -1,0 +1,7 @@
+The `add_to_index()` method in RAGPretrainedModel has two critical bugs:
+
+1. **Overwrite bug causing RuntimeError**: When adding a small number of documents (e.g., 1 document) to an existing index, the method fails with a Faiss clustering error: `RuntimeError: Error: 'nx >= k' failed: Number of training points (11) should be at least as large as number of clusters (32)`. This happens because when the method decides to re-index (when `current_len + new_doc_len < 5000` or `new_doc_len > current_len * 0.05`), it only indexes the new documents instead of ALL documents (existing collection + new documents). The re-indexing path should include all documents from the existing collection plus the new ones.
+
+2. **Duplicate path sections bug**: When calling `add_to_index()` with an `index_name` parameter, the index path gets duplicated. For example, a path like `.ragatouille/colbert/indexes/dharma_colb/metadata.json` becomes incorrectly constructed as `.ragatouille/colbert/indexes/colbert/indexes/dharma_colb/metadata.json`, causing a FileNotFoundError when trying to load the index metadata.
+
+Both issues prevent users from successfully adding documents to an existing index. The method should correctly handle adding documents of any quantity to an existing index without overwriting existing data, and should construct correct paths to the index files.
